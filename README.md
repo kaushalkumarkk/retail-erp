@@ -1,6 +1,6 @@
 # Retail ERP
 
-Local-first retailer ERP built in this folder using the Rahul Jee Trading reference interface and the React approach and shared currency/GST-state utilities from `../Medical/medical_erp`. The medical project is unchanged. No sample products, inventory, invoices, or customers are seeded.
+Local-first retailer ERP built in this folder using the Rahul Jee Trading reference interface and the React approach and shared currency/GST-state utilities from `../Medical/medical_erp`. The medical project is unchanged. The user-supplied 109-product Rahul catalog is bundled and imported once. No sample invoices or customers are seeded.
 
 ## Desktop app (primary)
 
@@ -33,6 +33,10 @@ npm run dev:web
 
 `npm run build:ui` builds the shared interface and `npm run preview` serves it for browser testing. This browser preview stores data separately from the desktop app. Production browser builds also support service-worker offline caching; Electron loads bundled assets directly and does not need a service worker.
 
+## Desktop screen layout
+
+The desktop uses the medical ERP’s white/green screen style, compact tables, full-width workspaces and wider three-column product/party forms. It opens maximized. The navigation button or Ctrl/Cmd+B collapses the sidebar to icons and expands the working area; this preference is remembered. The appearance is fixed to the medical ERP’s light workspace, with no theme switch. POS and invoice entry automatically collapse the sidebar to expand the billing area.
+
 ## Included modules
 
 - Dashboard: live sales, receivables, payables, cash/bank, inventory valuation, seven-day trends, low-stock alerts, quick actions.
@@ -43,7 +47,7 @@ npm run dev:web
 - Products: categories, HSN, unique barcodes, units, purchase/sale rates, GST percentage, opening stock, stock adjustments, reorder levels.
 - Payments and expenses: customer collections, supplier payouts, modes and references, expense categories and local input tax.
 - Accounting: balanced automatic journals, trial balance, profit/loss, GST outward/summary/HSN working reports, date filters and CSV exports.
-- Business settings, bank/UPI text details on invoices, themes, local operator profiles, full JSON backup/restore, CSV inventory import, guarded reset.
+- Business settings, bank/UPI text details on invoices, local operator profiles, full JSON backup/restore, CSV inventory import, guarded reset.
 - Shortcuts: F1 new sale, F4 new party, F5 new item, F6 payment, Ctrl/Cmd+K search, Escape closes dialogs.
 
 ## Bring your inventory
@@ -68,7 +72,7 @@ Cancellation preserves the original invoice and posts reversing entries; it is n
 
 ## Reference scope
 
-Reference: https://rahultrading.online/app and the supplied screenshots. Its public pages were inspected for visible navigation and screen structure. This implementation recreates those visible modules locally; it is not a copy of the reference site's private source, database, or protected behavior. Unlike the reference's server SQLite storage, this project explicitly uses browser localStorage. Server accounts, authentication, cloud synchronization, Excel XLSX imports, UPI QR generation, and portal filing integrations are not implemented. Local operator profiles control the interface only and are not an authentication/security boundary.
+Reference: https://rahultrading.online/app and the supplied screenshots. Its public pages were inspected for visible navigation and screen structure. This implementation recreates those visible modules locally; it is not a copy of the reference site's private source, database, or protected behavior. Unlike the reference's server SQLite storage, this project explicitly uses browser localStorage. Cloud accounts, cloud synchronization, Excel XLSX imports, UPI QR generation, and portal filing integrations are not implemented. Local operators now sign in with salted password hashes. This protects normal application access; it does not encrypt business records or prevent someone with filesystem/profile access from editing local data. Keep the computer and backups private.
 
 ## Verify
 
@@ -81,3 +85,35 @@ npm run test:offline
 ```
 
 The desktop test launches Electron with a temporary isolated profile, creates an item, closes and relaunches the app, and verifies persistence. Browser tests use installed Google Chrome. Set `ERP_BROWSER_CHANNEL=chromium` if using a separately installed Playwright Chromium browser. Tests run isolated browser contexts and do not change your normal browser's business data. Unit tests cover transactions, tax, inventory, credits, cancellations, imports and backup validation. Browser tests exercise the business workflows, mobile layout, persistence, restore, and production offline reload.
+
+## Supplied product catalog (v1.0.2)
+
+The supplied JSON is retained in `src/data/rahul-products.json`. On first launch of this version, missing products are added once, with an import marker saved alongside the workspace. Existing matching IDs, names or barcodes are preserved, and later stock movements are never reset by reopening or upgrading the app. Reset preserves the import marker so cleared products do not automatically return.
+
+All 109 products retain their source IDs, SKU, HSN, rates, category, units and stock; original metadata including MRP and wholesale rate is retained with each imported item. Imported stock valuation totals ₹38,80,770.00. The 21 negative quantities are preserved and block sales until replenished. Three products have no source unit; their display unit defaults to PCS while the original null unit is retained in metadata. Prices are copied as supplied, including any differences between sale rate and MRP.
+
+Sales, purchases, and POS share a full-width product search and invoice table. Customer/supplier details, tax totals, payment controls and Save sit in a full-width bottom dock. The table scrolls independently while the payment controls remain visible on desktop. Search supports product names, HSN, SKU and barcode, with keyboard selection and Enter to add. All screens use a fixed white/teal retail workspace with no appearance setting.
+
+## v1.0.3 workspace layout
+
+Product entry and invoice rows occupy the full workspace width, without a catalog or checkout side column. The payment dock follows the table across the bottom, borrowing the medical ERP’s workflow while using a distinct retail layout. Non-billing screens use fluid widths, consistent page headers, expandable search toolbars, and unrestricted report/settings work areas. The desktop test verifies table/dock geometry as well as catalog persistence.
+
+## Register pagination
+
+Inventory, parties, sales, purchases, payments, expenses and report tables show 20 matching records per page, with First/Previous/Next/Last navigation, page count and visible record range. Searches and filter changes return to page one. Deleting records clamps the current page to the remaining range. CSV export continues to include the complete filtered result, rather than just the visible page. Invoice entry and printed invoices retain all line items.
+
+## Register table height
+
+Desktop registers and accounting/GST tables fill the remaining window height, even with a short or empty result. Rows scroll inside the panel, column headers stay visible, and the 20-record pagination bar stays at the bottom. Report controls use compact spacing to reserve more space for rows. Mobile layouts keep page scrolling for narrow screens.
+
+## Financial year and reporting period
+
+The top-header calendar opens a working financial-year/date-range selector. Choose a year, Today, This Month, All Dates, or a custom range, then Apply Period. Custom ranges within a selected year must stay within April–March; choose All years for ranges spanning years. The choice is remembered on this device. It scopes transaction registers, dashboard activity/recent transactions/trends, accounting, P&L and GST reports. Stock, reorder alerts, cash/bank and current party balances remain current. New invoice dates still default to today, independently of the reporting filter. Reports can further narrow the header period using their date controls. Backups always contain the complete workspace.
+
+## Passwords and operators
+
+On first launch, the existing administrator sets a password (8–128 characters). Products and transactions are preserved. Save the recovery code shown on the next screen; it can be downloaded once. Then continue to the workspace. Later launches and reloads require sign-in. No default password is supplied.
+
+Click the top-right avatar (**Your Account**) to change your password, switch operators, or sign out. Password changes verify the current password. Admin Panel & Roles creates operators with an initial password and lets an administrator reset another operator’s password after confirming their own. Staff cannot open admin, settings or backup screens. Switching operators requires their password. Passwords are never stored as plaintext: PBKDF2-SHA256 uses a random salt and 310,000 iterations. Live sessions are held only in renderer memory; changing credentials invalidates an old session when the workspace is refreshed/synchronized.
+
+**Forgot Password?** on sign-in accepts the administrator recovery code and a new password, works offline, and issues a replacement recovery code. The old code stops working once the reset is committed. Operators without a recovery code ask an administrator for a reset. Recovery codes are stored as hashes, while the downloaded copy must be kept private. Restoring a JSON backup also restores the operators/password hashes in that backup; sign in with those credentials afterward. Business records remain localStorage data, not encrypted files.

@@ -1,3 +1,4 @@
+import { version as APP_VERSION } from "../package.json";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -133,6 +134,21 @@ import {
   validateBackup,
   importItems,
 } from "./lib/engine.mjs";
+import {
+  hashPassword,
+  verifyPassword,
+  changePassword,
+  createRecoveryCode,
+  recoverPassword,
+} from "./lib/auth.mjs";
+import {
+  yearRange,
+  validPeriod,
+  periodPreset,
+  scopeTransactions,
+} from "./lib/period.mjs";
+import suppliedCatalog from "./data/rahul-products.json";
+import { applyProductCatalog } from "./lib/catalog.mjs";
 import "./style.css";
 const KEY = "retailer-erp:v1";
 const nav = [
@@ -294,6 +310,10 @@ function Modal({ title, onClose, children, wide = false }) {
   useEffect(() => {
     const previous = document.activeElement;
     const key = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
       if (e.key === "Escape") onClose();
       if (e.key === "Tab") {
         const list = [
@@ -350,7 +370,10 @@ function App() {
   const [db, setDb] = useState(() => {
     try {
       const s = localStorage.getItem(KEY);
-      return s ? validateBackup(JSON.parse(s)) : fresh();
+      const current = s ? validateBackup(JSON.parse(s)) : fresh();
+      const next = applyProductCatalog(current, suppliedCatalog);
+      if (next !== current) localStorage.setItem(KEY, JSON.stringify(next));
+      return next;
     } catch {
       return null;
     }
@@ -358,16 +381,46 @@ function App() {
   const [page, setPage] = useState(() => location.hash.slice(2) || "dashboard");
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
-  const [dark, setDark] = useState(
-    () => localStorage.getItem("retailer-theme") !== "light",
-  );
   const [menu, setMenu] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem("retailer-sidebar-collapsed") === "1",
+  );
+  const toggleSidebar = () =>
+    setCollapsed((value) => {
+      localStorage.setItem("retailer-sidebar-collapsed", value ? "0" : "1");
+      return !value;
+    });
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState(false);
   const [userId, setUserId] = useState(
     () => sessionStorage.getItem("retailer-user") || "owner",
   );
   const [draft, setDraft] = useState(null);
+  const [signedIn, setSignedIn] = useState(null);
+  const [period, setPeriod] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem("retailer-period"));
+      return validPeriod(p) ? p : yearRange();
+    } catch {
+      return yearRange();
+    }
+  });
+  const periodDb = db ? scopeTransactions(db, period) : null;
+  const periodLabel = period.year === "all" ? "All years" : period.year;
+  const rangeLabel =
+    period.from && period.to
+      ? `${period.from} → ${period.to}`
+      : period.from
+        ? `From ${period.from}`
+        : period.to
+          ? `Through ${period.to}`
+          : "All dates";
+  const lockWorkspace = () => {
+    setSignedIn(null);
+    setModal(null);
+    setDraft(null);
+    setSearch(false);
+  };
   useEffect(() => {
     const sync = (e) => {
       if (e.key === KEY && e.newValue) {
@@ -379,8 +432,19 @@ function App() {
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
-  const m = db ? metrics(db) : {};
-  const user = db?.users.find((u) => u.id === userId) || db?.users[0];
+  const liveMetrics = db ? metrics(db) : {};
+  const periodMetrics = periodDb ? metrics(periodDb) : {};
+  const m = {
+    ...periodMetrics,
+    ...Object.fromEntries(
+      ["receivable", "payable", "cash", "stock", "low"].map((k) => [
+        k,
+        liveMetrics[k],
+      ]),
+    ),
+  };
+  const user =
+    db?.users.find((u) => u.id === (signedIn?.id || userId)) || db?.users[0];
   const admin = user?.role === "Admin";
   const notify = (s) => {
     setToast(s);
@@ -404,6 +468,13 @@ function App() {
     setDb(next);
   };
   const go = (p) => {
+    if (
+      ["pos", "sale-new", "purchase-new"].includes(p) &&
+      window.innerWidth > 850
+    ) {
+      setCollapsed(true);
+      localStorage.setItem("retailer-sidebar-collapsed", "1");
+    }
     location.hash = "/" + p;
     setPage(p);
     setMenu(false);
@@ -430,12 +501,13 @@ function App() {
     window.addEventListener("hashchange", hash);
     return () => window.removeEventListener("hashchange", hash);
   }, []);
-  useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("retailer-theme", dark ? "dark" : "light");
-  }, [dark]);
+
   useEffect(() => {
     const key = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setSearch(true);
@@ -490,6 +562,25 @@ function App() {
         {problem && <p>{problem}</p>}
       </div>
     );
+  if (
+    !signedIn ||
+    !db.users.some(
+      (u) => u.id === signedIn.id && u.credentials?.hash === signedIn.hash,
+    )
+  )
+    return (
+      <LoginScreen
+        db={db}
+        selectedId={userId}
+        onUnlock={(u, next) => {
+          if (next) commit(next);
+          setUserId(u.id);
+          setSignedIn({ id: u.id, hash: u.credentials.hash });
+          setPage("dashboard");
+          location.hash = "/dashboard";
+        }}
+      />
+    );
   const update = (fn, msg) =>
     attempt(() => {
       commit(fn(db));
@@ -506,7 +597,13 @@ function App() {
           WORKSPACE <span>/</span>{" "}
           {allNav.find((n) => n[0] === page)?.[1] || title}
         </div>
-        <h1>{title}</h1>
+        <h1>
+          <Icon
+            name={allNav.find((n) => n[0] === page)?.[2] || "LayoutDashboard"}
+            size={24}
+          />
+          {title}
+        </h1>
         <p>{sub}</p>
       </div>
       <div className="actions">{children}</div>
@@ -525,7 +622,7 @@ function App() {
               {stateName(db.settings.state)} ({db.settings.state})
             </b>
             <span className="separator">|</span> FY:{" "}
-            <b className="blue-text">{financialYear()}</b>
+            <b className="blue-text">{periodLabel}</b>
           </p>
         </div>
         <Badge>
@@ -633,7 +730,7 @@ function App() {
               </span>
             </div>
           </div>
-          <Trend db={db} />
+          <Trend db={periodDb} period={period} />
         </section>
         <section className="panel low-stock">
           <div className="section-heading">
@@ -685,7 +782,7 @@ function App() {
         <Table
           heads={["Invoice", "Date", "Party", "Type", "Amount", "Status"]}
           empty={
-            !db.documents.length && (
+            !periodDb.documents.length && (
               <Empty
                 title="Ready for your first transaction"
                 text="Add your products and customers, then create your first invoice."
@@ -698,7 +795,7 @@ function App() {
             )
           }
         >
-          {db.documents
+          {periodDb.documents
             .slice(-5)
             .reverse()
             .map((d) => (
@@ -753,6 +850,7 @@ function App() {
           />
         </div>
         <Records
+          key={`${page}-${period.from}-${period.to}`}
           items={db.items}
           placeholder="Search name, category, HSN or barcode…"
           onExport={(rows) => exportRows("inventory.csv", rows)}
@@ -851,6 +949,7 @@ function App() {
           />
         </div>
         <Records
+          key={`${page}-${period.from}-${period.to}`}
           items={db.parties}
           filterKey="type"
           placeholder="Search parties, phone, or GSTIN…"
@@ -925,7 +1024,7 @@ function App() {
     );
   else if (["sales", "non-gst", "purchases"].includes(page)) {
     const purchase = page === "purchases",
-      docs = db.documents.filter((d) =>
+      docs = periodDb.documents.filter((d) =>
         purchase
           ? d.type === "purchase"
           : d.type === "sale" && d.gst === (page === "sales"),
@@ -987,6 +1086,7 @@ function App() {
           />
         </div>
         <Records
+          key={`${page}-${period.from}-${period.to}`}
           items={docs.map((d) => ({
             ...d,
             status: d.void
@@ -1072,7 +1172,7 @@ function App() {
   } else if (["sale-new", "purchase-new", "pos"].includes(page))
     content = (
       <DocumentEditor
-        key={page}
+        key={`${page}-${period.from}-${period.to}`}
         db={db}
         initial={
           page === "pos"
@@ -1147,7 +1247,7 @@ function App() {
           <Stat
             label="TOTAL COLLECTIONS (PAYMENT IN)"
             value={money(
-              db.payments
+              periodDb.payments
                 .filter((p) => p.type === "In" && !p.void)
                 .reduce((s, p) => s + p.amount, 0),
             )}
@@ -1156,7 +1256,7 @@ function App() {
           <Stat
             label="TOTAL VENDOR PAYOUTS (PAYMENT OUT)"
             value={money(
-              db.payments
+              periodDb.payments
                 .filter((p) => p.type === "Out" && !p.void)
                 .reduce((s, p) => s + p.amount, 0),
             )}
@@ -1164,7 +1264,8 @@ function App() {
           />
         </div>
         <Records
-          items={db.payments}
+          key={`${page}-${period.from}-${period.to}`}
+          items={periodDb.payments}
           filterKey="mode"
           onExport={(rows) => exportRows("payments.csv", rows)}
           heads={[
@@ -1243,17 +1344,18 @@ function App() {
         <div className="stats two">
           <Stat
             label="TOTAL EXPENSES RECORDED"
-            value={money(db.expenses.reduce((s, e) => s + e.total, 0))}
+            value={money(periodDb.expenses.reduce((s, e) => s + e.total, 0))}
             color="rose"
           />
           <Stat
             label="GST INPUT ON EXPENSES"
-            value={money(db.expenses.reduce((s, e) => s + e.tax, 0))}
+            value={money(periodDb.expenses.reduce((s, e) => s + e.tax, 0))}
             color="green"
           />
         </div>
         <Records
-          items={db.expenses}
+          key={`${page}-${period.from}-${period.to}`}
+          items={periodDb.expenses}
           filterKey="category"
           onExport={(r) => exportRows("expenses.csv", r)}
           heads={[
@@ -1280,7 +1382,16 @@ function App() {
       </>
     );
   else if (["accounting", "profit", "gst"].includes(page))
-    content = <Reports db={db} page={page} Head={Head} onExport={exportRows} />;
+    content = (
+      <Reports
+        key={`${page}-${period.from}-${period.to}`}
+        db={periodDb}
+        period={period}
+        page={page}
+        Head={Head}
+        onExport={exportRows}
+      />
+    );
   else if (page === "settings")
     content = (
       <>
@@ -1453,8 +1564,8 @@ function App() {
         </Head>
         <div className="notice">
           <Icon name="InfoCircle" />
-          Local profiles are for shared-device workflow. Browser storage is
-          accessible to anyone with access to this browser.
+          Operators sign in with their own password. Keep device access and
+          exported backups private.
         </div>
         <Table heads={["Operator", "Role", "Access", "Actions"]}>
           {db.users.map((u) => (
@@ -1471,6 +1582,16 @@ function App() {
                   : "Sales, inventory, parties, payments, and reports"}
               </td>
               <td>
+                <Button
+                  kind="ghost"
+                  onClick={() =>
+                    u.id === user.id
+                      ? open("password")
+                      : open("resetPassword", u)
+                  }
+                >
+                  {u.id === user.id ? "Change password" : "Reset password"}
+                </Button>
                 {u.id !== user.id && (
                   <button
                     className="icon-btn danger-text"
@@ -1522,7 +1643,9 @@ function App() {
     : [];
   return (
     <>
-      <aside className={menu ? "sidebar open" : "sidebar"}>
+      <aside
+        className={`sidebar ${menu ? "open" : ""} ${collapsed ? "collapsed" : ""}`}
+      >
         <div className="brand">
           <div className="brand-mark">R</div>
           <div>
@@ -1530,12 +1653,6 @@ function App() {
             <Badge color="blue">PRO</Badge>
             <small>{db.settings.gstin || "Retail ERP"}</small>
           </div>
-        </div>
-        <div className="theme-switch">
-          <span>Theme</span>
-          <Button onClick={() => setDark(!dark)} icon={dark ? "Sun" : "Moon"}>
-            {dark ? "Light Mode" : "Dark Mode"}
-          </Button>
         </div>
         <nav>
           {nav.map(([group, links]) => (
@@ -1549,6 +1666,8 @@ function App() {
                 .map(([id, label, icon, badge]) => (
                   <button
                     key={id}
+                    title={label}
+                    aria-label={label}
                     className={`nav-link ${page === id ? "active" : ""}`}
                     onClick={() => go(id)}
                   >
@@ -1563,7 +1682,8 @@ function App() {
         <div className="sidebar-bottom">
           <div className="storage-status">
             <span className="dot" />
-            Offline & Local Storage <span className="version">v1.0</span>
+            Offline & Local Storage{" "}
+            <span className="version">v{APP_VERSION}</span>
           </div>
           <button className="profile" onClick={() => open("switch")}>
             <span className="avatar">{user.name[0]}</span>
@@ -1575,12 +1695,20 @@ function App() {
           </button>
         </div>
       </aside>
-      <div className="app-shell">
+      <div className={`app-shell ${collapsed ? "expanded" : ""}`}>
         <header className="topbar">
           <button
             className="icon-btn mobile-menu"
-            onClick={() => setMenu(!menu)}
+            onClick={() =>
+              window.innerWidth <= 850 ? setMenu(!menu) : toggleSidebar()
+            }
             aria-label="Toggle navigation"
+            title="Expand / collapse navigation (Ctrl+B)"
+            aria-expanded={
+              typeof window !== "undefined" && window.innerWidth <= 850
+                ? menu
+                : !collapsed
+            }
           >
             <Icon name="Menu2" />
           </button>
@@ -1669,15 +1797,19 @@ function App() {
             New Sale
           </Button>
           <button
-            className="icon-btn theme-icon"
-            aria-label="Toggle theme"
-            onClick={() => setDark(!dark)}
+            type="button"
+            className="fy period-trigger"
+            aria-label="Change financial year and date range"
+            onClick={() => open("period")}
+            title="Change transaction reporting period"
           >
-            <Icon name={dark ? "Sun" : "Moon"} size={23} />
+            <Icon name="Calendar" size={18} />
+            <span>
+              <b>FY {periodLabel}</b>
+              <small>{rangeLabel}</small>
+            </span>
+            <Icon name="ChevronRight" size={14} />
           </button>
-          <div className="fy">
-            <Icon name="Calendar" size={18} /> FY {financialYear()}
-          </div>
           <div className="top-company">
             <Icon name="BuildingStore" className="blue-text" />
             <div>
@@ -1695,12 +1827,31 @@ function App() {
           <button
             className="avatar outline"
             onClick={() => open("switch")}
-            title="Switch operator"
+            title="Your Account"
           >
             {user.name[0]}
           </button>
         </header>
-        <main>
+        <main
+          className={
+            ["pos", "sale-new", "purchase-new"].includes(page)
+              ? "billing-workspace"
+              : [
+                    "items",
+                    "parties",
+                    "sales",
+                    "non-gst",
+                    "purchases",
+                    "payments",
+                    "expenses",
+                    "accounting",
+                    "gst",
+                    "admin",
+                  ].includes(page)
+                ? "records-workspace"
+                : ""
+          }
+        >
           {allowed ? (
             content
           ) : (
@@ -1714,7 +1865,7 @@ function App() {
           )}
           <footer className="app-footer">
             <span>
-              Retail ERP <span className="muted">/</span> {financialYear()}
+              Retail ERP <span className="muted">/</span> {periodLabel}
             </span>
             <span>
               <span className="dot" /> All changes saved on this device
@@ -1750,10 +1901,13 @@ function App() {
               confirm: modal.data?.title,
               reset: "Reset Test Data",
               user: "Add Local Operator",
-              switch: "Switch Operator",
+              switch: "Your Account",
+              password: "Change Password",
+              resetPassword: "Reset Operator Password",
+              period: "Financial Year & Date Range",
             }[modal.type]
           }
-          wide={["invoice", "history"].includes(modal.type)}
+          wide={["invoice", "history", "item", "party"].includes(modal.type)}
           onClose={() => setModal(null)}
         >
           {modal.type === "item" && (
@@ -1832,6 +1986,7 @@ function App() {
                   );
                   commit({
                     ...fresh(),
+                    catalogImports: db.catalogImports,
                     settings: db.settings,
                     users: db.users,
                   });
@@ -1839,6 +1994,55 @@ function App() {
                   notify("Workspace reset; backup downloaded");
                 })
               }
+            />
+          )}
+          {modal.type === "period" && (
+            <PeriodForm
+              db={db}
+              current={period}
+              onApply={(p) => {
+                localStorage.setItem("retailer-period", JSON.stringify(p));
+                setPeriod(p);
+                setModal(null);
+              }}
+            />
+          )}
+          {modal.type === "password" && (
+            <PasswordForm
+              onSave={async (current, next) => {
+                const updated = await changePassword(
+                  db,
+                  user.id,
+                  current,
+                  next,
+                );
+                commit(updated);
+                setSignedIn({
+                  id: user.id,
+                  hash: updated.users.find((u) => u.id === user.id).credentials
+                    .hash,
+                });
+                setModal(null);
+                notify("Password changed");
+              }}
+            />
+          )}
+          {modal.type === "resetPassword" && admin && (
+            <PasswordForm
+              resetName={modal.data.name}
+              onSave={async (current, next) => {
+                if (!(await verifyPassword(current, user.credentials)))
+                  throw Error("Your administrator password is incorrect.");
+                const credentials = await hashPassword(next);
+                commit({
+                  ...db,
+                  users: db.users.map((u) =>
+                    u.id === modal.data.id ? { ...u, credentials } : u,
+                  ),
+                });
+                setModal(null);
+                notify("Operator password reset");
+              }}
             />
           )}
           {modal.type === "user" && (
@@ -1853,15 +2057,24 @@ function App() {
           )}
           {modal.type === "switch" && (
             <div className="modal-body switch-list">
+              <div className="account-actions">
+                <Button onClick={() => open("password")}>
+                  Change Password
+                </Button>
+                <Button onClick={lockWorkspace}>Sign Out</Button>
+              </div>
+              <p className="small muted">
+                Switching operators requires their password.
+              </p>
               {db.users.map((u) => (
                 <button
                   className="switch-user"
                   key={u.id}
                   onClick={() => {
-                    setUserId(u.id);
-                    sessionStorage.setItem("retailer-user", u.id);
-                    setModal(null);
-                    go("dashboard");
+                    if (u.id !== user.id) {
+                      setUserId(u.id);
+                      lockWorkspace();
+                    } else setModal(null);
                   }}
                 >
                   <span className="avatar">{u.name[0]}</span>
@@ -1926,6 +2139,8 @@ function Records({
   emptyTitle = "No records yet",
   emptyText = "New records will appear here.",
 }) {
+  const [requestedPage, setRequestedPage] = useState(1);
+  const pageSize = 20;
   const [q, setQ] = useState(""),
     [filter, setFilter] = useState("All"),
     [start, setStart] = useState(""),
@@ -1941,6 +2156,10 @@ function Records({
       (!start || i.date >= start) &&
       (!end || i.date <= end),
   );
+  const totalPages = Math.max(1, Math.ceil(matches.length / pageSize));
+  const currentPage = Math.min(requestedPage, totalPages);
+  const offset = (currentPage - 1) * pageSize;
+  const visible = matches.slice(offset, offset + pageSize);
   return (
     <section className="panel records">
       <div className="record-toolbar">
@@ -1950,14 +2169,20 @@ function Records({
             placeholder={placeholder}
             aria-label="Search records"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setRequestedPage(1);
+            }}
           />
         </div>
         {filterKey && (
           <select
             aria-label={`Filter by ${filterKey}`}
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setRequestedPage(1);
+            }}
           >
             <option>All</option>
             {[...new Set(items.map((i) => i[filterKey]).filter(Boolean))].map(
@@ -1972,14 +2197,20 @@ function Records({
           title="From date"
           type="date"
           value={start}
-          onChange={(e) => setStart(e.target.value)}
+          onChange={(e) => {
+            setStart(e.target.value);
+            setRequestedPage(1);
+          }}
         />
         <input
           aria-label="To date"
           title="To date"
           type="date"
           value={end}
-          onChange={(e) => setEnd(e.target.value)}
+          onChange={(e) => {
+            setEnd(e.target.value);
+            setRequestedPage(1);
+          }}
         />
         {onExport && (
           <Button icon="Download" onClick={() => onExport(matches)}>
@@ -1988,7 +2219,13 @@ function Records({
         )}
       </div>
       <div className="record-count">
-        Showing <b>{matches.length}</b> of {items.length} records
+        Showing{" "}
+        <b>
+          {matches.length ? offset + 1 : 0}–
+          {Math.min(offset + pageSize, matches.length)}
+        </b>{" "}
+        of <b>{matches.length}</b> records
+        {matches.length !== items.length && ` (${items.length} total)`}
       </div>
       <Table
         heads={heads}
@@ -2005,21 +2242,66 @@ function Records({
           )
         }
       >
-        {matches.map(render)}
+        {visible.map(render)}
       </Table>
+      <nav className="pagination" aria-label="Table pagination">
+        <span>20 records per page</span>
+        <div className="pager-controls">
+          <Button
+            type="button"
+            onClick={() => setRequestedPage(1)}
+            disabled={currentPage === 1}
+            aria-label="First page"
+          >
+            First
+          </Button>
+          <Button
+            type="button"
+            onClick={() => setRequestedPage(currentPage - 1)}
+            disabled={currentPage === 1}
+            aria-label="Previous page"
+          >
+            Previous
+          </Button>
+          <span className="page-position" aria-live="polite">
+            Page <b>{currentPage}</b> of <b>{totalPages}</b>
+          </span>
+          <Button
+            type="button"
+            onClick={() => setRequestedPage(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            aria-label="Next page"
+          >
+            Next
+          </Button>
+          <Button
+            type="button"
+            onClick={() => setRequestedPage(totalPages)}
+            disabled={currentPage === totalPages}
+            aria-label="Last page"
+          >
+            Last
+          </Button>
+        </div>
+      </nav>
     </section>
   );
 }
-function Trend({ db }) {
+function Trend({ db, period }) {
   const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - 6 + i);
+    const end = period?.to && period.to < today() ? period.to : today();
+    const d = new Date(end + "T12:00:00+05:30");
+    d.setUTCDate(d.getUTCDate() - 6 + i);
     const date = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Kolkata",
     }).format(d);
     return {
       date,
-      label: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+      label: d.toLocaleDateString("en-IN", {
+        day: "numeric",
+        month: "short",
+        timeZone: "Asia/Kolkata",
+      }),
       sale: db.documents
         .filter((x) => !x.void && x.date === date && x.type === "sale")
         .reduce((s, x) => s + x.total, 0),
@@ -2108,7 +2390,11 @@ function MasterForm({ type, data, onSave, onCancel }) {
       label={label}
       type={kind}
       required={required}
-      min={kind === "number" ? 0 : undefined}
+      min={
+        kind === "number" && !(key === "stock" && f.sourceProductId)
+          ? 0
+          : undefined
+      }
       max={key === "gst" ? 100 : undefined}
       step={kind === "number" ? "any" : undefined}
       value={f[key] ?? ""}
@@ -2122,7 +2408,7 @@ function MasterForm({ type, data, onSave, onCancel }) {
   );
   return (
     <form
-      className="modal-body"
+      className="modal-body master-form"
       onSubmit={(e) => {
         e.preventDefault();
         onSave(f);
@@ -2139,7 +2425,8 @@ function MasterForm({ type, data, onSave, onCancel }) {
           <>
             {field("category", "Category")}
             {field("hsn", "HSN / SAC Code")}
-            {field("barcode", "Barcode / SKU")}
+            {field("barcode", "Barcode")}
+            {field("sku", "SKU / Product Code")}
             <Select
               label="Unit of Measure"
               value={f.unit}
@@ -2157,6 +2444,9 @@ function MasterForm({ type, data, onSave, onCancel }) {
                 "DOZEN",
                 "MTR",
                 "SET",
+                "TIN",
+                "JAR",
+                "PKT",
               ].map((u) => (
                 <option key={u}>{u}</option>
               ))}
@@ -2478,7 +2768,8 @@ function ImportForm({ onImport }) {
 function DocumentEditor({ db, initial, pos, onSave, onBack }) {
   const [f, setF] = useState(initial),
     [q, setQ] = useState(""),
-    [category, setCategory] = useState("All Items"),
+    [showProducts, setShowProducts] = useState(false),
+    [highlight, setHighlight] = useState(0),
     [fullPaid, setFullPaid] = useState(pos || false);
   const purchase = f.type === "purchase";
   const party = db.parties.find((p) => p.id === f.partyId);
@@ -2534,335 +2825,316 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
       setQ("");
     }
   };
-  const catalog = db.items.filter(
-    (i) =>
-      (category === "All Items" || (i.category || "General") === category) &&
-      `${i.name} ${i.barcode} ${i.hsn}`.toLowerCase().includes(q.toLowerCase()),
+  const catalog = db.items.filter((i) =>
+    `${i.name} ${i.sku || ""} ${i.barcode} ${i.hsn}`
+      .toLowerCase()
+      .includes(q.toLowerCase()),
   );
+  const candidates = catalog.slice(0, 14);
+  const choose = (i) => {
+    if (!i || (!purchase && i.stock <= 0)) return;
+    add(i);
+    setQ("");
+    setShowProducts(false);
+    setHighlight(0);
+  };
   return (
     <>
-      <div className="page-head">
+      <div className="page-head transaction-heading">
         <div>
-          <div className="breadcrumb">
-            TRANSACTIONS <span>/</span>{" "}
-            {pos ? "Express POS" : purchase ? "New Purchase" : "New Sale"}
-          </div>
+          <div className="workspace-kicker">RETAIL / TRANSACTIONS</div>
           <h1>
             {pos
               ? "Express POS"
               : purchase
-                ? "Record Purchase Bill"
+                ? "New purchase"
                 : f.gst
-                  ? "New GST Invoice"
-                  : "New Non-GST Invoice"}
+                  ? "New GST invoice"
+                  : "New non-GST invoice"}
           </h1>
-          <p>
-            {pos
-              ? "Fast checkout. Search, scan, and sell."
-              : "Stock, party balances, and accounting update when you save."}
-          </p>
         </div>
-        <Button icon="ArrowLeft" onClick={onBack}>
-          Back to Register
-        </Button>
+        <div className="actions">
+          <span className="transaction-hint">
+            Search → Add items → Settle bill
+          </span>
+          <Button icon="ArrowLeft" onClick={onBack}>
+            Back to Register
+          </Button>
+        </div>
       </div>
-      <form onSubmit={submit}>
-        <div className={pos ? "pos-layout" : "invoice-layout"}>
-          {pos && (
-            <section className="panel catalog">
-              <div className="catalog-head">
-                <h2>
-                  Catalog <span className="muted">({db.items.length})</span>
-                </h2>
-                <div className="inline-search">
-                  <Icon name="Search" />
-                  <input
-                    autoFocus
-                    aria-label="Scan barcode or search products"
-                    placeholder="Scan barcode or search products…"
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        const i =
-                          db.items.find((i) => i.barcode === q) ||
-                          (catalog.length === 1 ? catalog[0] : null);
-                        if (i) {
-                          add(i);
-                          setQ("");
-                        }
-                      }
-                    }}
-                  />
-                </div>
-                <div className="tabs">
-                  {[
-                    "All Items",
-                    ...new Set(db.items.map((i) => i.category || "General")),
-                  ].map((c) => (
-                    <button
-                      type="button"
-                      className={category === c ? "selected" : ""}
-                      onClick={() => setCategory(c)}
-                      key={c}
-                    >
-                      {c}
-                    </button>
-                  ))}
-                </div>
+      <form className="transaction-form" onSubmit={submit}>
+        <section className="product-entry" aria-label="Add products">
+          <div className="product-search-box">
+            <span className="search-symbol">
+              <Icon name="Search" size={24} />
+            </span>
+            <input
+              autoFocus
+              role="combobox"
+              aria-label="Add Product / Search Item"
+              aria-autocomplete="list"
+              aria-expanded={showProducts}
+              aria-controls="product-matches"
+              aria-activedescendant={
+                showProducts && candidates[highlight]
+                  ? `match-${candidates[highlight].id}`
+                  : undefined
+              }
+              placeholder="Search product name, SKU, HSN or scan a barcode…"
+              value={q}
+              onFocus={() => setShowProducts(true)}
+              onBlur={() => setShowProducts(false)}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setShowProducts(true);
+                setHighlight(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setShowProducts(false);
+                }
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setShowProducts(true);
+                  setHighlight((v) =>
+                    Math.max(
+                      0,
+                      Math.min(
+                        candidates.length - 1,
+                        v + (e.key === "ArrowDown" ? 1 : -1),
+                      ),
+                    ),
+                  );
+                }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (showProducts || q)
+                    choose(
+                      db.items.find(
+                        (i) =>
+                          (i.barcode && i.barcode === q) ||
+                          (i.sku && i.sku === q),
+                      ) || candidates[highlight],
+                    );
+                }
+              }}
+            />
+            <kbd>↵ Add</kbd>
+            <span className="catalog-count">{db.items.length} products</span>
+          </div>
+          {showProducts && (
+            <div
+              className="product-matches"
+              id="product-matches"
+              role="listbox"
+              aria-label="Matching products"
+            >
+              <div className="match-header">
+                <span>PRODUCT / SKU</span>
+                <span>AVAILABLE</span>
+                <span>RATE</span>
               </div>
-              <div className="product-grid">
-                {catalog.map((i) => (
-                  <button
-                    type="button"
-                    className="product"
-                    key={i.id}
-                    onClick={() => add(i)}
-                    disabled={i.stock <= 0}
-                  >
-                    <div className="product-icon">
-                      <Icon name="Package" size={30} />
-                    </div>
-                    <small>{i.category || "General"}</small>
+              {candidates.map((i, index) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={highlight === index}
+                  id={`match-${i.id}`}
+                  key={i.id}
+                  disabled={!purchase && i.stock <= 0}
+                  className={highlight === index ? "highlighted" : ""}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => choose(i)}
+                >
+                  <span>
                     <b>{i.name}</b>
-                    <div>
-                      <strong>{money(i.price)}</strong>
-                      <small>
-                        {i.stock} {i.unit}
-                      </small>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              {!catalog.length && (
-                <Empty
-                  title={
-                    db.items.length
-                      ? "No matching products"
-                      : "Your catalog is empty"
-                  }
-                  text="Add or import products in Items & Inventory to start billing."
-                />
+                    <small>{i.sku || i.hsn || i.category}</small>
+                  </span>
+                  <span className={i.stock <= 0 ? "danger-text" : ""}>
+                    {i.stock} {i.unit}
+                  </span>
+                  <strong>{money(purchase ? i.cost : i.price)}</strong>
+                </button>
+              ))}
+              {!candidates.length && (
+                <p className="no-matches">
+                  No matching products. Add or import products in Items &
+                  Inventory.
+                </p>
               )}
-            </section>
+            </div>
           )}
-          <div className="document-main">
-            <section className="panel padded">
-              <h2>
-                {pos ? "POS Cart" : "Invoice Details"}{" "}
-                <span className="muted small">{f.lines.length} items</span>
-              </h2>
-              <div className="form-grid document-fields">
-                <Select
-                  label={purchase ? "Supplier *" : "Customer"}
-                  required={purchase}
-                  value={f.partyId}
-                  onChange={(e) => setF({ ...f, partyId: e.target.value })}
-                >
-                  <option value="">
-                    {purchase ? "Select Supplier" : "Walk-in Customer"}
-                  </option>
-                  {db.parties
-                    .filter(
-                      (p) => p.type === (purchase ? "Supplier" : "Customer"),
-                    )
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                </Select>
-                <Input
-                  label="Invoice Date"
-                  type="date"
-                  required
-                  value={f.date}
-                  onChange={(e) => setF({ ...f, date: e.target.value })}
-                />
-                {purchase && (
-                  <Input
-                    label="Supplier Bill Reference"
-                    value={f.reference || ""}
-                    onChange={(e) => setF({ ...f, reference: e.target.value })}
-                  />
-                )}
-                <Select
-                  label="Tax Type"
-                  value={String(f.gst)}
-                  onChange={(e) =>
-                    setF({ ...f, gst: e.target.value === "true" })
+        </section>
+        <div className="bill-table-heading">
+          <span>
+            <b>{f.lines.length}</b> line items ·{" "}
+            {f.lines.reduce((sum, l) => sum + Number(l.qty || 0), 0)} units
+          </span>
+          <span>
+            Prices exclude GST · Edit quantity, rate or discount directly
+          </span>
+        </div>
+        <section
+          className="panel line-items document-main full-width-lines"
+          aria-label="Invoice items"
+        >
+          {" "}
+          <Table
+            heads={
+              pos
+                ? ["Item", "Qty", "Rate", "Total", ""]
+                : ["Product", "Quantity", "Rate", "Disc %", "GST", "Total", ""]
+            }
+            empty={
+              !f.lines.length && (
+                <Empty
+                  title="Your cart is empty"
+                  text={
+                    pos
+                      ? "Scan a barcode or select a product from the catalog."
+                      : "Search a product above and press Enter to add it."
                   }
-                >
-                  <option value="true">GST Invoice</option>
-                  <option value="false">Non-GST Invoice</option>
-                </Select>
-              </div>
-            </section>
-            <section className="panel line-items">
-              {!pos && (
-                <div className="padded">
-                  <Select
-                    label="Add Product / Search Item"
-                    value=""
-                    onChange={(e) => {
-                      const i = db.items.find((i) => i.id === e.target.value);
-                      if (i) add(i);
-                    }}
-                  >
-                    <option value="">Select an item to add…</option>
-                    {db.items.map((i) => (
-                      <option key={i.id} value={i.id}>
-                        {i.name} · {i.stock} {i.unit} ·{" "}
-                        {money(purchase ? i.cost : i.price)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              )}
-              <Table
-                heads={
-                  pos
-                    ? ["Item", "Qty", "Rate", "Total", ""]
-                    : [
-                        "Product",
-                        "Quantity",
-                        "Rate",
-                        "Disc %",
-                        "GST",
-                        "Total",
-                        "",
-                      ]
-                }
-                empty={
-                  !f.lines.length && (
-                    <Empty
-                      title="Your cart is empty"
-                      text={
-                        pos
-                          ? "Scan a barcode or select a product from the catalog."
-                          : "Select products above to add invoice lines."
-                      }
+                />
+              )
+            }
+          >
+            {f.lines.map((l, index) => {
+              const i = db.items.find((i) => i.id === l.itemId),
+                c = calc.lines[index];
+              return (
+                <tr key={l.itemId}>
+                  <td>
+                    <b>{i?.name}</b>
+                    <small>
+                      {i?.hsn} · {i?.unit}
+                    </small>
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`${i?.name} quantity`}
+                      className="cell-input"
+                      type="number"
+                      min="0.001"
+                      step="any"
+                      required
+                      value={l.qty}
+                      onChange={(e) => setLine(index, "qty", e.target.value)}
                     />
-                  )
-                }
-              >
-                {f.lines.map((l, index) => {
-                  const i = db.items.find((i) => i.id === l.itemId),
-                    c = calc.lines[index];
-                  return (
-                    <tr key={l.itemId}>
-                      <td>
-                        <b>{i?.name}</b>
-                        <small>
-                          {i?.hsn} · {i?.unit}
-                        </small>
-                      </td>
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`${i?.name} rate`}
+                      className="cell-input rate"
+                      type="number"
+                      min="0"
+                      step="any"
+                      required
+                      value={l.rate}
+                      onChange={(e) => setLine(index, "rate", e.target.value)}
+                    />
+                  </td>
+                  {!pos && (
+                    <>
                       <td>
                         <input
-                          aria-label={`${i?.name} quantity`}
+                          aria-label={`${i?.name} discount percent`}
                           className="cell-input"
                           type="number"
-                          min="0.001"
-                          step="any"
-                          required
-                          value={l.qty}
-                          onChange={(e) =>
-                            setLine(index, "qty", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          aria-label={`${i?.name} rate`}
-                          className="cell-input rate"
-                          type="number"
                           min="0"
+                          max="100"
                           step="any"
-                          required
-                          value={l.rate}
+                          value={l.discount}
                           onChange={(e) =>
-                            setLine(index, "rate", e.target.value)
+                            setLine(index, "discount", e.target.value)
                           }
                         />
                       </td>
-                      {!pos && (
-                        <>
-                          <td>
-                            <input
-                              aria-label={`${i?.name} discount percent`}
-                              className="cell-input"
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="any"
-                              value={l.discount}
-                              onChange={(e) =>
-                                setLine(index, "discount", e.target.value)
-                              }
-                            />
-                          </td>
-                          <td>{f.gst ? i?.gst : 0}%</td>
-                        </>
-                      )}
-                      <td>{money(c?.total)}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="icon-btn danger-text"
-                          title="Remove item"
-                          onClick={() =>
-                            setF({
-                              ...f,
-                              lines: f.lines.filter((_, j) => index !== j),
-                            })
-                          }
-                        >
-                          <Icon name="X" size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Table>
-            </section>
-            {!pos && (
-              <section className="panel padded">
+                      <td>{f.gst ? i?.gst : 0}%</td>
+                    </>
+                  )}
+                  <td>{money(c?.total)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="icon-btn danger-text"
+                      title="Remove item"
+                      onClick={() =>
+                        setF({
+                          ...f,
+                          lines: f.lines.filter((_, j) => index !== j),
+                        })
+                      }
+                    >
+                      <Icon name="X" size={16} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        </section>
+        <section
+          className="billing-dock"
+          aria-label="Bill details, totals and payment"
+        >
+          {" "}
+          <section className="billing-customer">
+            <h2>
+              Bill details{" "}
+              <span className="muted small">{f.lines.length} items</span>
+            </h2>
+            <div className="form-grid document-fields">
+              <Select
+                label={purchase ? "Supplier *" : "Customer"}
+                required={purchase}
+                value={f.partyId}
+                onChange={(e) => setF({ ...f, partyId: e.target.value })}
+              >
+                <option value="">
+                  {purchase ? "Select Supplier" : "Walk-in Customer"}
+                </option>
+                {db.parties
+                  .filter(
+                    (p) => p.type === (purchase ? "Supplier" : "Customer"),
+                  )
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </Select>
+              <Input
+                label="Invoice Date"
+                type="date"
+                required
+                value={f.date}
+                onChange={(e) => setF({ ...f, date: e.target.value })}
+              />
+              {purchase && (
                 <Input
-                  label="Notes / Terms"
-                  value={f.notes || ""}
-                  onChange={(e) => setF({ ...f, notes: e.target.value })}
+                  label="Supplier Bill Reference"
+                  value={f.reference || ""}
+                  onChange={(e) => setF({ ...f, reference: e.target.value })}
                 />
-              </section>
-            )}
-          </div>
-          <section className="panel checkout padded">
-            <div className="eyebrow">PAYMENT SUMMARY</div>
-            <div className="summary-row">
-              <span>Taxable value</span>
-              <b>{money(calc.taxable)}</b>
+              )}
+              <Select
+                label="Tax Type"
+                value={String(f.gst)}
+                onChange={(e) => setF({ ...f, gst: e.target.value === "true" })}
+              >
+                <option value="true">GST Invoice</option>
+                <option value="false">Non-GST Invoice</option>
+              </Select>
             </div>
-            {calc.igst > 0 ? (
-              <div className="summary-row">
-                <span>IGST</span>
-                <b>{money(calc.igst)}</b>
-              </div>
-            ) : (
-              <>
-                <div className="summary-row">
-                  <span>CGST</span>
-                  <b>{money(calc.cgst)}</b>
-                </div>
-                <div className="summary-row">
-                  <span>SGST</span>
-                  <b>{money(calc.sgst)}</b>
-                </div>
-              </>
-            )}
-            <div className="total-row">
-              <span>TOTAL PAYABLE</span>
-              <strong>{money(calc.total)}</strong>
-            </div>
+            <Input
+              label="Notes / Terms"
+              value={f.notes || ""}
+              onChange={(e) => setF({ ...f, notes: e.target.value })}
+            />
+          </section>
+          <section className="billing-payment">
+            <h2>Payment & balance</h2>{" "}
             <Select
               label="Payment Mode"
               value={f.mode}
@@ -2902,6 +3174,36 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
                 Existing party balance: {money(balance(db, party))}
               </p>
             )}
+          </section>
+          <section className="billing-totals">
+            <div className="tax-breakdown">
+              {" "}
+              <div className="summary-row">
+                <span>Taxable value</span>
+                <b>{money(calc.taxable)}</b>
+              </div>
+              {calc.igst > 0 ? (
+                <div className="summary-row">
+                  <span>IGST</span>
+                  <b>{money(calc.igst)}</b>
+                </div>
+              ) : (
+                <>
+                  <div className="summary-row">
+                    <span>CGST</span>
+                    <b>{money(calc.cgst)}</b>
+                  </div>
+                  <div className="summary-row">
+                    <span>SGST</span>
+                    <b>{money(calc.sgst)}</b>
+                  </div>
+                </>
+              )}
+            </div>{" "}
+            <div className="total-row">
+              <span>TOTAL PAYABLE</span>
+              <strong>{money(calc.total)}</strong>
+            </div>
             <Button
               type="submit"
               kind="primary full"
@@ -2918,17 +3220,18 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
               <Icon name="ShieldCheck" size={16} /> Saved locally on this device
             </div>
           </section>
-        </div>
+        </section>
       </form>
     </>
   );
 }
-function Reports({ db, page, Head, onExport }) {
+
+function Reports({ db, period, page, Head, onExport }) {
   const [tab, setTab] = useState(
       page === "gst" ? "GSTR-1 Outward" : "Trial Balance",
     ),
-    [start, setStart] = useState(""),
-    [end, setEnd] = useState("");
+    [start, setStart] = useState(period.from || ""),
+    [end, setEnd] = useState(period.to || "");
   const filtered = {
     ...db,
     documents: db.documents.filter(
@@ -3119,7 +3422,7 @@ function Reports({ db, page, Head, onExport }) {
             }
           />
         </div>
-        <section className="panel">
+        <section className="panel report-panel">
           <div className="tabs padded-tabs">
             {["GSTR-1 Outward", "GSTR-3B Summary", "HSN/SAC Summary"].map(
               (t) => (
@@ -3135,6 +3438,7 @@ function Reports({ db, page, Head, onExport }) {
           </div>
           {tab === "GSTR-1 Outward" ? (
             <Records
+              key={`${page}-${period.from}-${period.to}`}
               items={sales}
               heads={[
                 "Invoice No",
@@ -3182,6 +3486,7 @@ function Reports({ db, page, Head, onExport }) {
             />
           ) : tab === "HSN/SAC Summary" ? (
             <Records
+              key={`${page}-${period.from}-${period.to}`}
               items={Object.values(hsn)}
               heads={[
                 "HSN",
@@ -3263,7 +3568,7 @@ function Reports({ db, page, Head, onExport }) {
           icon="Scale"
         />
       </div>
-      <section className="panel">
+      <section className="panel report-panel">
         <div className="tabs padded-tabs">
           {["Trial Balance", "Journal Entries"].map((t) => (
             <button
@@ -3277,13 +3582,14 @@ function Reports({ db, page, Head, onExport }) {
         </div>
         {tab === "Trial Balance" ? (
           <Records
+            key={`${page}-${period.from}-${period.to}`}
             items={accounts}
             heads={[
               "Account",
               "Debit Turnover",
               "Credit Turnover",
-              "Closing Debit",
-              "Closing Credit",
+              "Net Period Debit",
+              "Net Period Credit",
             ]}
             onExport={(r) => onExport("trial-balance.csv", r)}
             render={(a) => (
@@ -3298,6 +3604,7 @@ function Reports({ db, page, Head, onExport }) {
           />
         ) : (
           <Records
+            key={`${page}-${period.from}-${period.to}`}
             items={filtered.journals.flatMap((j) =>
               j.entries.map((e, i) => ({
                 ...e,
@@ -3672,12 +3979,26 @@ function ResetForm({ onReset }) {
 }
 function UserForm({ onSave }) {
   const [f, setF] = useState({ name: "", role: "Staff" });
+  const [password, setPassword] = useState(""),
+    [confirm, setConfirm] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
   return (
     <form
       className="modal-body"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
-        onSave({ ...f, name: f.name.trim() });
+        setError("");
+        setBusy(true);
+        try {
+          if (password !== confirm) throw Error("Passwords do not match.");
+          const credentials = await hashPassword(password);
+          await onSave({ ...f, name: f.name.trim(), credentials });
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
       }}
     >
       <Input
@@ -3695,17 +4016,440 @@ function UserForm({ onSave }) {
         <option>Staff</option>
         <option>Admin</option>
       </Select>
+      <Input
+        label="Initial Password"
+        type="password"
+        minLength={8}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+      <Input
+        label="Confirm Password"
+        type="password"
+        required
+        autoComplete="new-password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+      />
+      {error && (
+        <p role="alert" className="danger-text">
+          {error}
+        </p>
+      )}
       <div className="form-footer">
-        <Button kind="primary" type="submit">
+        <Button kind="primary" type="submit" disabled={busy}>
           Add Operator
         </Button>
       </div>
     </form>
   );
 }
+function LoginScreen({ db, selectedId, onUnlock }) {
+  const setup = !db.users.some((u) => u.credentials);
+  const owner = db.users.find((u) => u.role === "Admin");
+  const [id, setId] = useState(
+      setup
+        ? owner.id
+        : db.users.some((u) => u.id === selectedId)
+          ? selectedId
+          : owner.id,
+    ),
+    [password, setPassword] = useState(""),
+    [confirm, setConfirm] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const [recovery, setRecovery] = useState(false),
+    [recoveryInput, setRecoveryInput] = useState(""),
+    [pending, setPending] = useState(null);
+  const operator = db.users.find((u) => u.id === id);
+  if (pending)
+    return (
+      <div className="login-shell">
+        <section className="login-card">
+          <div className="brand-mark">R</div>
+          <h1>Save your recovery code</h1>
+          <p>
+            This code can reset {pending.user.name}'s password offline. Save it
+            privately; it is shown once. A new code replaces any previous code.
+          </p>
+          <code className="recovery-code" data-testid="recovery-code">
+            {pending.code}
+          </code>
+          <Button
+            onClick={() =>
+              download(
+                "retail-erp-recovery-code.txt",
+                `${db.settings.name}\nOperator: ${pending.user.name}\nRecovery code: ${pending.code}\nKeep this code private. It can reset your password.\n`,
+                "text/plain",
+              )
+            }
+          >
+            Download Recovery Code
+          </Button>
+          <Button
+            kind="primary full"
+            onClick={() => {
+              try {
+                onUnlock(pending.user, pending.db);
+              } catch (e) {
+                setError(e.message);
+              }
+            }}
+          >
+            Continue to Workspace
+          </Button>
+          {error && (
+            <p role="alert" className="danger-text">
+              {error}
+            </p>
+          )}
+        </section>
+      </div>
+    );
+  return (
+    <div className="login-shell">
+      <section className="login-card">
+        <div className="brand-mark">R</div>
+        <div className="workspace-kicker">RETAIL ERP · DESKTOP</div>
+        <h1>
+          {setup
+            ? "Secure your workspace"
+            : recovery
+              ? "Recover your account"
+              : "Welcome back"}
+        </h1>
+        <p>{db.settings.name}</p>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setError("");
+            setBusy(true);
+            try {
+              if (setup) {
+                if (password !== confirm)
+                  throw Error("Passwords do not match.");
+                const credentials = await hashPassword(password);
+                const code = createRecoveryCode();
+                const recoveryCredentials = await hashPassword(code);
+                const u = { ...owner, credentials, recoveryCredentials };
+                setPending({
+                  user: u,
+                  code,
+                  db: {
+                    ...db,
+                    users: db.users.map((x) => (x.id === u.id ? u : x)),
+                  },
+                });
+              } else if (recovery) {
+                if (password !== confirm)
+                  throw Error("Passwords do not match.");
+                const result = await recoverPassword(
+                  db,
+                  id,
+                  recoveryInput,
+                  password,
+                );
+                setPending({
+                  user: result.user,
+                  db: result.db,
+                  code: result.recoveryCode,
+                });
+              } else {
+                if (!operator.credentials)
+                  throw Error("Ask an administrator to set your password.");
+                if (!(await verifyPassword(password, operator.credentials)))
+                  throw Error("Password is incorrect.");
+                onUnlock(operator);
+              }
+            } catch (e) {
+              setError(e.message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <Select
+            label="Operator"
+            value={id}
+            disabled={setup || busy}
+            onChange={(e) => {
+              setId(e.target.value);
+              setPassword("");
+              setError("");
+              setRecovery(false);
+              setRecoveryInput("");
+            }}
+          >
+            {db.users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name} · {u.role}
+              </option>
+            ))}
+          </Select>
+          {recovery && (
+            <Input
+              label="Recovery Code"
+              required
+              value={recoveryInput}
+              onChange={(e) => setRecoveryInput(e.target.value)}
+              autoComplete="off"
+            />
+          )}
+          <Input
+            label={setup || recovery ? "New Password" : "Password"}
+            type="password"
+            required
+            minLength={setup || recovery ? 8 : undefined}
+            maxLength={128}
+            autoComplete={
+              setup || recovery ? "new-password" : "current-password"
+            }
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {(setup || recovery) && (
+            <>
+              <Input
+                label="Confirm Password"
+                type="password"
+                required
+                maxLength={128}
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+              <p className="small muted">
+                Choose at least 8 characters. Your saved products and business
+                records will stay in place.
+              </p>
+            </>
+          )}
+          {error && (
+            <p role="alert" className="danger-text">
+              {error}
+            </p>
+          )}
+          <Button type="submit" kind="primary full" disabled={busy}>
+            {busy
+              ? "Please wait…"
+              : setup
+                ? "Set Password & Continue"
+                : recovery
+                  ? "Reset Password"
+                  : "Sign In"}
+          </Button>
+        </form>
+        {!setup && (
+          <Button
+            kind="ghost full"
+            type="button"
+            disabled={!operator.recoveryCredentials}
+            onClick={() => {
+              setRecovery(!recovery);
+              setPassword("");
+              setConfirm("");
+              setRecoveryInput("");
+              setError("");
+            }}
+          >
+            {recovery
+              ? "Back to Sign In"
+              : operator.recoveryCredentials
+                ? "Forgot Password?"
+                : "Forgot password? Ask your administrator"}
+          </Button>
+        )}
+        <div className="login-foot">
+          Retail ERP v{APP_VERSION} · Data saved on this computer
+        </div>
+      </section>
+    </div>
+  );
+}
+function PasswordForm({ onSave, resetName }) {
+  const [current, setCurrent] = useState(""),
+    [next, setNext] = useState(""),
+    [confirm, setConfirm] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="modal-body password-form"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError("");
+        if (next !== confirm) {
+          setError("Passwords do not match.");
+          return;
+        }
+        setBusy(true);
+        try {
+          await onSave(current, next);
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {resetName && (
+        <p>
+          Set a new password for <b>{resetName}</b>. Enter your administrator
+          password to confirm.
+        </p>
+      )}
+      <Input
+        label={resetName ? "Your Administrator Password" : "Current Password"}
+        type="password"
+        required
+        maxLength={128}
+        autoComplete="current-password"
+        value={current}
+        onChange={(e) => setCurrent(e.target.value)}
+      />
+      <Input
+        label="New Password"
+        type="password"
+        minLength={8}
+        maxLength={128}
+        required
+        autoComplete="new-password"
+        value={next}
+        onChange={(e) => setNext(e.target.value)}
+      />
+      <Input
+        label="Confirm New Password"
+        type="password"
+        required
+        maxLength={128}
+        autoComplete="new-password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+      />
+      {error && (
+        <p role="alert" className="danger-text">
+          {error}
+        </p>
+      )}
+      <div className="form-footer">
+        <Button kind="primary" type="submit" disabled={busy}>
+          {busy ? "Saving…" : resetName ? "Reset Password" : "Change Password"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+function PeriodForm({ db, current, onApply }) {
+  const [p, setP] = useState(current),
+    [error, setError] = useState("");
+  const currentYear = Number(financialYear().slice(0, 4));
+  const years = [
+    ...new Set([
+      currentYear - 3,
+      currentYear - 2,
+      currentYear - 1,
+      currentYear,
+      currentYear + 1,
+      currentYear + 2,
+      ...db.documents.map((d) => Number(financialYear(d.date).slice(0, 4))),
+      ...db.journals.map((d) => Number(financialYear(d.date).slice(0, 4))),
+    ]),
+  ].sort((a, b) => b - a);
+  const preset = (name) => {
+    setP(periodPreset(name, p.year));
+    setError("");
+  };
+  return (
+    <form
+      className="modal-body"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!validPeriod(p)) {
+          setError(
+            "Choose a valid date range within the selected financial year, or select All years.",
+          );
+          return;
+        }
+        onApply(p);
+      }}
+    >
+      <p>
+        Apply a reporting period to sales, purchases, payments, expenses,
+        dashboard activity, and accounting/GST reports. Stock and party balances
+        remain current.
+      </p>
+      <Select
+        label="Financial Year"
+        value={p.year}
+        onChange={(e) => {
+          setP(
+            e.target.value === "all"
+              ? periodPreset("all")
+              : yearRange(e.target.value),
+          );
+          setError("");
+        }}
+      >
+        <option value="all">All years</option>
+        {years.map((y) => {
+          const label = `${y}-${String(y + 1).slice(2)}`;
+          return (
+            <option key={label} value={label}>
+              {label} (1 Apr – 31 Mar)
+            </option>
+          );
+        })}
+      </Select>
+      <div className="period-presets">
+        {[
+          ["year", "Full Financial Year"],
+          ["today", "Today"],
+          ["month", "This Month"],
+          ["all", "All Dates"],
+        ].map(([id, label]) => (
+          <Button key={id} type="button" onClick={() => preset(id)}>
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="form-grid">
+        <Input
+          label="From Date"
+          type="date"
+          value={p.from || ""}
+          onChange={(e) => setP({ ...p, from: e.target.value })}
+        />
+        <Input
+          label="To Date"
+          type="date"
+          value={p.to || ""}
+          onChange={(e) => setP({ ...p, to: e.target.value })}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="danger-text">
+          {error}
+        </p>
+      )}
+      <div className="form-footer">
+        <Button type="submit" kind="primary">
+          Apply Period
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 createRoot(document.getElementById("root")).render(<App />);
 
-if (import.meta.env.PROD && location.protocol !== "retail:" && "serviceWorker" in navigator)
+if (
+  import.meta.env.PROD &&
+  location.protocol !== "retail:" &&
+  "serviceWorker" in navigator
+)
   window.addEventListener("load", () =>
     navigator.serviceWorker.register("./sw.js").catch(() => {}),
   );

@@ -1,3 +1,4 @@
+import { validCredential } from "./auth.mjs";
 export const VERSION = 1;
 export const round = (n) =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -47,6 +48,11 @@ export const fresh = () => ({
   journals: [],
   users: [{ id: "owner", name: "Rahul", role: "Admin" }],
 });
+const finiteStock = (n) => {
+  const value = Number(n);
+  if (!Number.isFinite(value)) throw Error("Invalid stock quantity.");
+  return value;
+};
 const positive = (n, label, zero = true) => {
   if (
     !Number.isFinite(Number(n)) ||
@@ -122,7 +128,9 @@ export function saveItem(state, input) {
     name: input.name.trim(),
     cost: positive(input.cost, "Purchase price"),
     price: positive(input.price, "Sale price"),
-    stock: positive(input.stock, "Stock"),
+    stock: input.sourceProductId
+      ? finiteStock(input.stock)
+      : positive(input.stock, "Stock"),
     min: positive(input.min || 0, "Minimum stock"),
     gst: positive(input.gst || 0, "GST"),
     unit: input.unit || "PCS",
@@ -309,7 +317,38 @@ export function postDocument(state, input) {
       const added = calc.lines
         .filter((l) => l.itemId === id)
         .reduce((s, l) => s + l.taxable, 0);
-      i.cost = round((i.stock * i.cost + added) / (i.stock + qty));
+      const oldValue = round(i.stock * i.cost);
+      const nextStock = round(i.stock + qty);
+      const nextCost =
+        i.stock <= 0
+          ? round(added / qty)
+          : round((oldValue + added) / nextStock);
+      if (i.stock < 0) {
+        const adjustment = round(nextStock * nextCost - oldValue - added);
+        if (adjustment)
+          journal(
+            db,
+            doc.id,
+            doc.date,
+            `Deficit stock valuation · ${i.name}`,
+            adjustment > 0
+              ? [
+                  { account: "Inventory", debit: adjustment },
+                  {
+                    account: "Opening equity / stock adjustments",
+                    credit: adjustment,
+                  },
+                ]
+              : [
+                  {
+                    account: "Opening equity / stock adjustments",
+                    debit: -adjustment,
+                  },
+                  { account: "Inventory", credit: -adjustment },
+                ],
+          );
+      }
+      i.cost = nextCost;
       i.stock = round(i.stock + qty);
     } else i.stock = round(i.stock - qty);
   }
@@ -396,7 +435,11 @@ export function voidDocument(state, id) {
     } else i.stock = round(i.stock + q);
   }
   d.void = true;
-  const original = db.journals.find((j) => j.source === id);
+  const original = {
+    entries: db.journals
+      .filter((j) => j.source === id)
+      .flatMap((j) => j.entries),
+  };
   journal(
     db,
     `void-${id}`,
@@ -485,7 +528,11 @@ export function voidPayment(state, id) {
     p = db.payments.find((p) => p.id === id);
   if (!p || p.void) throw Error("Payment already cancelled.");
   p.void = true;
-  const original = db.journals.find((j) => j.source === id);
+  const original = {
+    entries: db.journals
+      .filter((j) => j.source === id)
+      .flatMap((j) => j.entries),
+  };
   journal(
     db,
     "void-" + id,
@@ -595,12 +642,24 @@ export function validateBackup(value) {
     !value.users.some((u) => u.role === "Admin")
   )
     throw Error("Invalid settings or administrator.");
+  for (const u of value.users) {
+    if (
+      !u.id ||
+      typeof u.name !== "string" ||
+      !["Admin", "Staff"].includes(u.role) ||
+      (u.credentials && !validCredential(u.credentials)) ||
+      (u.recoveryCredentials && !validCredential(u.recoveryCredentials))
+    )
+      throw Error("Invalid operator credentials.");
+  }
   const ids = new Set();
   for (const i of value.items) {
     if (typeof i.id !== "string" || !i.name || ids.has(i.id))
       throw Error("Invalid or duplicate item.");
     ids.add(i.id);
-    for (const k of ["stock", "cost", "price", "min", "gst"]) positive(i[k], k);
+    for (const k of ["cost", "price", "min", "gst"]) positive(i[k], k);
+    if (i.sourceProductId) finiteStock(i.stock);
+    else positive(i.stock, "stock");
   }
   for (const p of value.parties) {
     if (!p.id || !p.name || !["Customer", "Supplier"].includes(p.type))
