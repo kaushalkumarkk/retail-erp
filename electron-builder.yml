@@ -1,0 +1,29 @@
+appId: com.devnexa.retailerp
+productName: Retail ERP
+copyright: Copyright © 2026 DevNexa
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/**
+  - package.json
+asar: true
+npmRebuild: false
+mac:
+  category: public.app-category.business
+  target:
+    - dmg
+    - zip
+  identity: null
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Retail ERP
+linux:
+  target: AppImage
+  category: Office
