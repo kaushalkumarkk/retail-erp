@@ -64,6 +64,27 @@ function balanced(db) {
   const rows = ledger(db);
   assert.ok(Math.abs(rows.reduce((s, a) => s + a.debit - a.credit, 0)) < 0.02);
 }
+test("bill GST overrides update totals and journals without changing the product rate", () => {
+  const initial = fixture();
+  const lines = [{ itemId: initial.items[0].id, qty: 2, rate: 100, discount: 10, gstRate: "18" }];
+  const { db, doc } = postDocument(initial, invoice(initial, {
+    type: "purchase", partyId: initial.parties[1].id, lines,
+  }));
+  assert.equal(doc.lines[0].gstRate, 18);
+  assert.equal(doc.taxable, 180);
+  assert.equal(doc.igst, 32.4);
+  assert.equal(doc.total, 212.4);
+  assert.equal(db.items[0].gst, 5);
+  balanced(db);
+  const local = calculate(lines, initial.items);
+  assert.equal(local.cgst, 16.2);
+  assert.equal(local.sgst, 16.2);
+  assert.equal(calculate([{ ...lines[0], gstRate: 0 }], initial.items).tax, 0);
+  assert.equal(calculate(lines, initial.items, false).tax, 0);
+  for (const gstRate of [-1, 101, "invalid"]) {
+    assert.throws(() => calculate([{ ...lines[0], gstRate }], initial.items), /GST/);
+  }
+});
 test("sale reduces stock, computes CGST/SGST and COGS, keeps balanced books", () => {
   const initial = fixture();
   const { db, doc } = postDocument(initial, invoice(initial));

@@ -236,25 +236,31 @@ test("CSV inventory import, purchase, expense, and JSON restore", async ({
   await expect(
     page.getByRole("cell", { name: "Soap PCS", exact: false }),
   ).toBeVisible();
-  await page.keyboard.press("F4");
-  await dialog.getByLabel("Party Name").fill("Supply Co");
-  await dialog
-    .getByRole("combobox", { name: "Party Type", exact: true })
-    .selectOption("Supplier");
-  await dialog.getByRole("button", { name: "Save Party" }).click();
   await page
     .locator(".sidebar")
     .getByRole("button", { name: "Purchases", exact: true })
     .click();
   await page.getByRole("button", { name: "Record Purchase Bill" }).click();
   await page
-    .getByRole("combobox", { name: "Supplier *", exact: true })
-    .selectOption({ label: "Supply Co" });
-  await page
     .getByRole("combobox", { name: "Add Product / Search Item" })
     .fill("Soap");
   await page.getByRole("option", { name: /Soap/ }).click();
   await page.getByLabel("Soap quantity").fill("5");
+  await expect(page.getByLabel("Soap GST percent")).toHaveValue("18");
+  await page.getByLabel("Soap GST percent").fill("5");
+  await expect(page.locator(".billing-dock")).toContainText("52.50");
+  const supplier = page.getByRole("combobox", { name: "Supplier *", exact: true });
+  await supplier.selectOption({ label: "+ Add New Supplier" });
+  await expect(dialog).toHaveAccessibleName("Add New Supplier");
+  await expect(dialog.getByRole("combobox", { name: "Party Type", exact: true })).toHaveValue("Supplier");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByLabel("Soap quantity")).toHaveValue("5");
+  await supplier.selectOption({ label: "+ Add New Supplier" });
+  await dialog.getByLabel("Party Name").fill("Supply Co");
+  await dialog.getByRole("button", { name: "Save Party" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(supplier.locator("option:checked")).toHaveText("Supply Co");
+  await expect(page.getByLabel("Soap GST percent")).toHaveValue("5");
   await page.getByLabel("Paid in full").check();
   await page
     .getByRole("button", { name: "Save Purchase Bill", exact: true })
@@ -299,6 +305,9 @@ test("CSV inventory import, purchase, expense, and JSON restore", async ({
   expect(saved.items[0].stock).toBe(15);
   expect(saved.expenses[0].total).toBe(100);
   expect(saved.documents).toHaveLength(1);
+  expect(saved.documents[0].lines[0].gstRate).toBe(5);
+  expect(saved.documents[0].total).toBe(52.5);
+  expect(saved.items[0].gst).toBe(18);
 });
 test("production build reloads offline", async ({ page, context }) => {
   test.skip(

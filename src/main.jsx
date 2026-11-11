@@ -432,14 +432,9 @@ function App() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
   const [menu, setMenu] = useState(false);
-  const [collapsed, setCollapsed] = useState(
-    () => localStorage.getItem("retailer-sidebar-collapsed") === "1",
-  );
+  const [collapsed, setCollapsed] = useState(false);
   const toggleSidebar = () =>
-    setCollapsed((value) => {
-      localStorage.setItem("retailer-sidebar-collapsed", value ? "0" : "1");
-      return !value;
-    });
+    setCollapsed((value) => !value);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState(false);
   const [userId, setUserId] = useState(
@@ -524,13 +519,6 @@ function App() {
     setDb(next);
   };
   const go = (p) => {
-    if (
-      ["pos", "sale-new", "purchase-new"].includes(p) &&
-      window.innerWidth > 850
-    ) {
-      setCollapsed(true);
-      localStorage.setItem("retailer-sidebar-collapsed", "1");
-    }
     location.hash = "/" + p;
     setPage(p);
     setMenu(false);
@@ -1252,6 +1240,16 @@ function App() {
               }
         }
         pos={page === "pos"}
+        onAddSupplier={(onCreated) =>
+          setModal({
+            type: "party",
+            data: {
+              name: "", type: "Supplier", phone: "", email: "", gstin: "",
+              state: db.settings.state, address: "", opening: 0, creditLimit: 0,
+            },
+            onSaved: onCreated,
+          })
+        }
         onBack={() => go(page === "purchase-new" ? "purchases" : "sales")}
         onSave={(f) =>
           attempt(() => {
@@ -1720,7 +1718,6 @@ function App() {
           <div className="brand-mark">R</div>
           <div>
             <b>{db.settings.name.replace(" COMPANY", "")}</b>
-            <Badge color="blue">PRO</Badge>
             <small>{db.settings.gstin || "Retail ERP"}</small>
           </div>
         </div>
@@ -1750,11 +1747,6 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="storage-status">
-            <span className="dot" />
-            Offline & Local Storage{" "}
-            <span className="version">v{APP_VERSION}</span>
-          </div>
           <button className="profile" onClick={() => open("switch")}>
             <span className="avatar">{user.name[0]}</span>
             <span>
@@ -1963,7 +1955,11 @@ function App() {
           title={
             {
               item: modal.data ? "Edit Product" : "Add New Product",
-              party: modal.data ? "Edit Party" : "Add New Party",
+              party: modal.data?.id
+                ? "Edit Party"
+                : modal.onSaved
+                  ? "Add New Supplier"
+                  : "Add New Party",
               payment: "Record Payment",
               expense: "Record Expense",
               import: "Import Inventory",
@@ -1992,9 +1988,20 @@ function App() {
           {modal.type === "party" && (
             <MasterForm
               type="party"
+              lockPartyType={Boolean(modal.onSaved)}
               data={modal.data}
               onCancel={() => setModal(null)}
-              onSave={(f) => update((s) => saveParty(s, f), "Party saved")}
+              onSave={(f) => {
+                if (!modal.onSaved)
+                  return update((s) => saveParty(s, f), "Party saved");
+                return attempt(() => {
+                  const next = saveParty(db, { ...f, type: "Supplier" });
+                  commit(next);
+                  modal.onSaved(next.parties[next.parties.length - 1].id);
+                  setModal(null);
+                  notify("Supplier saved");
+                });
+              }}
             />
           )}
           {modal.type === "payment" && (
@@ -2435,7 +2442,7 @@ function Trend({ db, period }) {
     </div>
   );
 }
-function MasterForm({ type, data, onSave, onCancel }) {
+function MasterForm({ type, data, onSave, onCancel, lockPartyType = false }) {
   const [f, setF] = useState(
     data ||
       (type === "item"
@@ -2545,6 +2552,7 @@ function MasterForm({ type, data, onSave, onCancel }) {
           <>
             <Select
               label="Party Type"
+              disabled={lockPartyType}
               value={f.type}
               onChange={(e) => setF({ ...f, type: e.target.value })}
             >
@@ -2844,7 +2852,7 @@ function ImportForm({ onImport }) {
     </div>
   );
 }
-function DocumentEditor({ db, initial, pos, onSave, onBack }) {
+function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
   const [f, setF] = useState(initial),
     [q, setQ] = useState(""),
     [showProducts, setShowProducts] = useState(false),
@@ -3051,7 +3059,7 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
             {f.lines.reduce((sum, l) => sum + Number(l.qty || 0), 0)} units
           </span>
           <span>
-            Prices exclude GST · Edit quantity, rate or discount directly
+            Prices exclude GST · Edit quantity, rate, discount or GST directly
           </span>
         </div>
         <section
@@ -3129,7 +3137,22 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
                           }
                         />
                       </td>
-                      <td>{f.gst ? i?.gst : 0}%</td>
+                      <td>
+                        <input
+                          aria-label={`${i?.name} GST percent`}
+                          className="cell-input"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="any"
+                          required
+                          disabled={!f.gst}
+                          value={f.gst ? (l.gstRate ?? i?.gst ?? 0) : 0}
+                          onChange={(e) =>
+                            setLine(index, "gstRate", e.target.value)
+                          }
+                        />
+                      </td>
                     </>
                   )}
                   <td>{money(c?.total)}</td>
@@ -3168,11 +3191,20 @@ function DocumentEditor({ db, initial, pos, onSave, onBack }) {
                 label={purchase ? "Supplier *" : "Customer"}
                 required={purchase}
                 value={f.partyId}
-                onChange={(e) => setF({ ...f, partyId: e.target.value })}
+                onChange={(e) => {
+                  if (purchase && e.target.value === "__add_supplier__") {
+                    onAddSupplier((id) =>
+                      setF((current) => ({ ...current, partyId: id })),
+                    );
+                  } else setF({ ...f, partyId: e.target.value });
+                }}
               >
                 <option value="">
                   {purchase ? "Select Supplier" : "Walk-in Customer"}
                 </option>
+                {purchase && (
+                  <option value="__add_supplier__">+ Add New Supplier</option>
+                )}
                 {db.parties
                   .filter(
                     (p) => p.type === (purchase ? "Supplier" : "Customer"),

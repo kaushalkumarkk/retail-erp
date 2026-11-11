@@ -73,7 +73,8 @@ export function calculate(lines, items, gst = true, interstate = false) {
       rate = positive(l.rate, "Rate"),
       discount = positive(l.discount || 0, "Discount");
     if (discount > 100) throw Error("Discount cannot exceed 100%.");
-    const gstRate = gst ? Number(i.gst) : 0;
+    const gstRate = gst ? positive(l.gstRate ?? i.gst, "GST") : 0;
+    if (gstRate > 100) throw Error("GST cannot exceed 100%.");
     const taxable = round(qty * rate * (1 - discount / 100)),
       tax = round((taxable * gstRate) / 100);
     const cgst = interstate ? 0 : round(tax / 2),
