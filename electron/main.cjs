@@ -6,8 +6,12 @@ const {
   Menu,
   dialog,
   shell,
+  ipcMain,
+  powerMonitor,
 } = require("electron");
 const path = require("node:path");
+const fs = require("node:fs");
+const { createLicenceService } = require("./licence-core.cjs");
 const { pathToFileURL } = require("node:url");
 app.setName("Retail ERP");
 // This stable origin keeps localStorage consistent across app updates and installs.
@@ -21,6 +25,7 @@ if (!app.isPackaged && process.env.ERP_TEST_PROFILE)
   app.setPath("userData", process.env.ERP_TEST_PROFILE);
 let mainWindow;
 let downloadsConfigured = false;
+let licence;
 const origin = "retail://app";
 const isAppURL = (url) => {
   try {
@@ -41,6 +46,88 @@ else {
   });
   app.whenReady().then(() => {
     const root = path.join(app.getAppPath(), "dist");
+    const testing = !app.isPackaged && !!process.env.ERP_TEST_PROFILE;
+    const publicKey = fs.readFileSync(
+      testing && process.env.ERP_TEST_PUBLIC_KEY
+        ? process.env.ERP_TEST_PUBLIC_KEY
+        : path.join(__dirname, "licence-public.pem"),
+      "utf8",
+    );
+    licence = createLicenceService({
+      directory: app.getPath("userData"),
+      publicKey,
+      ...(testing && process.env.ERP_TEST_NOW_FILE
+        ? {
+            now: () =>
+              Number(fs.readFileSync(process.env.ERP_TEST_NOW_FILE, "utf8")),
+          }
+        : {}),
+    });
+    const trusted = (event) =>
+      mainWindow &&
+      event.sender.id === mainWindow.webContents.id &&
+      event.senderFrame?.routingId === event.sender.mainFrame.routingId &&
+      isAppURL(event.senderFrame.url);
+    ipcMain.handle("retail:licence-status", (event) => {
+      if (!trusted(event)) throw Error("Invalid licence request.");
+      return licence.status();
+    });
+    ipcMain.handle("retail:licence-activate", (event, key) => {
+      if (!trusted(event)) throw Error("Invalid licence request.");
+      const status = licence.activate(key);
+      if (
+        status.state === "active" &&
+        new URL(mainWindow.webContents.getURL()).pathname === "/licence.html"
+      )
+        setImmediate(() => mainWindow?.loadURL(origin + "/"));
+      return status;
+    });
+    ipcMain.on("retail:licence-assert", (event) => {
+      try {
+        if (!trusted(event)) throw Error("Invalid licence request.");
+        licence.assertActive();
+        event.returnValue = { ok: true };
+      } catch (e) {
+        event.returnValue = { ok: false, message: e.message };
+      }
+    });
+    ipcMain.handle("retail:licence-backup", async (event) => {
+      if (!trusted(event)) throw Error("Invalid backup request.");
+      const data = await mainWindow.webContents.executeJavaScript(
+        "localStorage.getItem('retailer-erp:v1')",
+      );
+      if (!data)
+        return {
+          saved: false,
+          message: "There is no workspace data on this computer yet.",
+        };
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: "Save Retail ERP Data Backup",
+        defaultPath: path.join(
+          app.getPath("downloads"),
+          "retail-erp-backup.json",
+        ),
+        filters: [{ name: "JSON backup", extensions: ["json"] }],
+      });
+      if (result.canceled) return { saved: false };
+      fs.writeFileSync(result.filePath, data, { mode: 0o600 });
+      return { saved: true };
+    });
+    const enforce = () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const active = licence.status().state === "active";
+      const locked =
+        new URL(mainWindow.webContents.getURL() || origin).pathname ===
+        "/licence.html";
+      if (!active && !locked) {
+        mainWindow.webContents.stop();
+        mainWindow.loadURL(origin + "/licence.html");
+      } else if (active && locked) mainWindow.loadURL(origin + "/");
+    };
+    const monitor = setInterval(enforce, 1000);
+    monitor.unref();
+    powerMonitor.on("resume", enforce);
+
     protocol.handle("retail", (request) => {
       if (!isAppURL(request.url))
         return new Response("Forbidden", { status: 403 });
@@ -50,6 +137,16 @@ else {
       } catch {
         return new Response("Bad request", { status: 400 });
       }
+      const lockFiles = {
+        "/licence.html": "licence.html",
+        "/licence-screen.js": "licence-screen.js",
+      };
+      if (lockFiles[requested])
+        return net.fetch(
+          pathToFileURL(path.join(__dirname, lockFiles[requested])).href,
+        );
+      if (licence.status().state !== "active")
+        return Response.redirect(origin + "/licence.html");
       const file = path.resolve(
         root,
         "." + (requested === "/" ? "/index.html" : requested),
@@ -69,12 +166,14 @@ else {
         backgroundColor: "#f0fdf7",
         show: false,
         webPreferences: {
+          preload: path.join(__dirname, "preload.cjs"),
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
           webSecurity: true,
         },
       });
+      mainWindow.on("focus", enforce);
       mainWindow.once("ready-to-show", () => {
         mainWindow.maximize();
         mainWindow.show();
@@ -105,7 +204,10 @@ else {
         mainWindow = null;
       });
       mainWindow
-        .loadURL(origin + "/")
+        .loadURL(
+          origin +
+            (licence.status().state === "active" ? "/" : "/licence.html"),
+        )
         .catch((error) =>
           dialog.showErrorBox("Retail ERP could not start", error.message),
         );

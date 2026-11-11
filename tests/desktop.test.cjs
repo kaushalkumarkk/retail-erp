@@ -4,6 +4,8 @@ const { _electron: electron } = require("playwright");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
+const licenceCore = require("../electron/licence-core.cjs");
 async function unlock(page) {
   await page
     .getByRole("heading", { name: /Secure your workspace|Welcome back/ })
@@ -31,6 +33,47 @@ test("desktop starts without a server, saves data, and preserves it after relaun
   const profile = await fs.mkdtemp(
     path.join(os.tmpdir(), "retail-desktop-test-"),
   );
+  const pair = crypto.generateKeyPairSync("ed25519");
+  const publicPath = path.join(profile, "test-public.pem"),
+    clockPath = path.join(profile, "test-clock.txt");
+  await fs.writeFile(
+    publicPath,
+    pair.publicKey.export({ type: "spki", format: "pem" }),
+  );
+  const initialTime = Date.now();
+  await fs.writeFile(clockPath, String(initialTime));
+  let issued;
+  async function activateIfNeeded(page) {
+    await page.waitForFunction(
+      () =>
+        location.protocol === "retail:" && document.readyState === "complete",
+    );
+    if (new URL(page.url()).pathname === "/licence.html") {
+      await page.waitForFunction(
+        () => document.getElementById("machine")?.value,
+      );
+      const machine = await page
+        .getByLabel("Machine ID", { exact: true })
+        .inputValue();
+      const starts = licenceCore.indiaDate(initialTime);
+      issued = {
+        v: 1,
+        app: "retail-erp",
+        id: "RT-DESKTOP-TEST",
+        shop: "Desktop Test",
+        machine,
+        issued: starts,
+        starts,
+        expires: licenceCore.addYear(starts),
+      };
+      await page
+        .getByRole("textbox", { name: "Annual licence key" })
+        .fill(licenceCore.signLicence(issued, pair.privateKey));
+      await page
+        .getByRole("button", { name: "Activate Licence", exact: true })
+        .click();
+    }
+  }
   let app;
   const launch = () =>
     electron.launch({
@@ -39,11 +82,14 @@ test("desktop starts without a server, saves data, and preserves it after relaun
         ...process.env,
         ELECTRON_RUN_AS_NODE: undefined,
         ERP_TEST_PROFILE: profile,
+        ERP_TEST_PUBLIC_KEY: publicPath,
+        ERP_TEST_NOW_FILE: clockPath,
       },
     });
   try {
     app = await launch();
     let page = await app.firstWindow();
+    await activateIfNeeded(page);
     await unlock(page);
     await page
       .getByRole("heading", { name: "RAHUL JEE TRADING COMPANY" })
@@ -138,6 +184,7 @@ test("desktop starts without a server, saves data, and preserves it after relaun
     app = null;
     app = await launch();
     page = await app.firstWindow();
+    await activateIfNeeded(page);
     await unlock(page);
     await page
       .getByRole("heading", { name: "RAHUL JEE TRADING COMPANY" })
@@ -247,6 +294,61 @@ test("desktop starts without a server, saves data, and preserves it after relaun
       );
     }
     await page.screenshot({ path: "/tmp/retail-fullheight-table.png" });
+    await fs.writeFile(
+      clockPath,
+      String(Date.parse(issued.expires + "T00:00:00+05:30") + 1000),
+    );
+    await page.waitForURL("**/licence.html");
+    await page
+      .getByRole("heading", { name: "Your annual licence has expired" })
+      .waitFor();
+    await page.screenshot({ path: "/tmp/retail-expired-licence.png" });
+    assert.equal(
+      await page.evaluate(() => {
+        try {
+          window.retailDesktop.assertLicensed();
+          return false;
+        } catch {
+          return true;
+        }
+      }),
+      true,
+    );
+    await page.goto("retail://app/");
+    await page.waitForURL("**/licence.html");
+    await fs.writeFile(clockPath, String(initialTime));
+    assert.equal(
+      (await page.evaluate(() => window.retailDesktop.licenceStatus())).state,
+      "expired",
+    );
+    await app.close();
+    app = null;
+    app = await launch();
+    page = await app.firstWindow();
+    await page.waitForURL("**/licence.html");
+    assert.equal(
+      (await page.evaluate(() => window.retailDesktop.licenceStatus())).state,
+      "expired",
+    );
+    const renewed = {
+      ...issued,
+      id: "RT-DESKTOP-RENEWED",
+      starts: issued.expires,
+      expires: licenceCore.addYear(issued.expires),
+    };
+    await page
+      .getByRole("textbox", { name: "Annual licence key" })
+      .fill(licenceCore.signLicence(renewed, pair.privateKey));
+    await page
+      .getByRole("button", { name: "Activate Licence", exact: true })
+      .click();
+    await unlock(page);
+    assert.equal(
+      await page.evaluate(
+        () => JSON.parse(localStorage.getItem("retailer-erp:v1")).items.length,
+      ),
+      110,
+    );
   } finally {
     if (app) await app.close();
     await fs.rm(profile, { recursive: true, force: true });

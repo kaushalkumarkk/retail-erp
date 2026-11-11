@@ -1,5 +1,5 @@
 import { version as APP_VERSION } from "../package.json";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useId } from "react";
 import { createRoot } from "react-dom/client";
 import {
   IconPackage,
@@ -32,6 +32,7 @@ import {
   IconCircleCheck,
   IconClock,
   IconEye,
+  IconEyeOff,
   IconBan,
   IconDeviceDesktop,
   IconDatabaseExport,
@@ -87,6 +88,7 @@ const Icons = {
   IconCircleCheck,
   IconClock,
   IconEye,
+  IconEyeOff,
   IconBan,
   IconDeviceDesktop,
   IconDatabaseExport,
@@ -146,6 +148,7 @@ import {
   validPeriod,
   periodPreset,
   scopeTransactions,
+  inPeriod,
 } from "./lib/period.mjs";
 import suppliedCatalog from "./data/rahul-products.json";
 import { applyProductCatalog } from "./lib/catalog.mjs";
@@ -185,6 +188,7 @@ const nav = [
       ["admin", "Admin Panel & Roles", "Crown"],
       ["settings", "Business Settings", "Settings"],
       ["backup", "Backup & Data Export", "Database"],
+      ["licence", "Licence & Renewal", "ShieldCheck"],
     ],
   ],
 ];
@@ -208,12 +212,58 @@ function Field({ label, children }) {
     </label>
   );
 }
-function Input({ label, ...p }) {
+function Input({ label, visibilityKey, ...p }) {
+  const id = useId();
+  if (p.type === "password")
+    return (
+      <div className="field">
+        <label className="input-label" htmlFor={p.id || id}>
+          {label}
+        </label>
+        <PasswordInput
+          key={`${label}-${visibilityKey || ""}`}
+          label={label}
+          {...p}
+          id={p.id || id}
+        />
+      </div>
+    );
   return (
     <Field label={label}>
       <input {...p} />
     </Field>
   );
+}
+function PasswordInput({ label, ...props }) {
+  const [visible, setVisible] = useState(false);
+  const id = useId();
+  return (
+    <div className="password-input">
+      <input
+        {...props}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        id={props.id || id}
+        type={visible ? "text" : "password"}
+      />
+      <button
+        type="button"
+        className="icon-btn password-eye"
+        aria-label={`${visible ? "Hide" : "Show"} ${label.toLowerCase()}`}
+        aria-pressed={visible}
+        aria-controls={props.id || id}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setVisible((v) => !v)}
+      >
+        <Icon name={visible ? "EyeOff" : "Eye"} size={18} />
+      </button>
+    </div>
+  );
+}
+function persistWorkspace(value) {
+  window.retailDesktop.assertLicensed();
+  localStorage.setItem(KEY, value);
 }
 function Select({ label, children, ...p }) {
   return (
@@ -372,7 +422,7 @@ function App() {
       const s = localStorage.getItem(KEY);
       const current = s ? validateBackup(JSON.parse(s)) : fresh();
       const next = applyProductCatalog(current, suppliedCatalog);
-      if (next !== current) localStorage.setItem(KEY, JSON.stringify(next));
+      if (next !== current) persistWorkspace(JSON.stringify(next));
       return next;
     } catch {
       return null;
@@ -436,6 +486,11 @@ function App() {
   const periodMetrics = periodDb ? metrics(periodDb) : {};
   const m = {
     ...periodMetrics,
+    sales: periodDb
+      ? periodDb.documents
+          .filter((d) => !d.void && d.type === "sale")
+          .reduce((sum, d) => sum + d.total, 0)
+      : 0,
     ...Object.fromEntries(
       ["receivable", "payable", "cash", "stock", "low"].map((k) => [
         k,
@@ -459,8 +514,9 @@ function App() {
   };
   const commit = (next) => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(next));
-    } catch {
+      persistWorkspace(JSON.stringify(next));
+    } catch (error) {
+      if (error?.name !== "QuotaExceededError") throw error;
       throw Error(
         "Could not save data. Browser storage may be full. Export a backup before continuing.",
       );
@@ -551,7 +607,7 @@ function App() {
                 const value = validateBackup(
                   JSON.parse(await e.target.files[0].text()),
                 );
-                localStorage.setItem(KEY, JSON.stringify(value));
+                persistWorkspace(JSON.stringify(value));
                 setDb(value);
               } catch (e) {
                 setProblem(e.message);
@@ -631,10 +687,10 @@ function App() {
       </section>
       <div className="stats five">
         <Stat
-          label="TODAY’S SALES"
+          label="SALES IN SELECTED PERIOD"
           value={money(m.sales)}
           icon="TrendingUp"
-          note="Gross billing today"
+          note={rangeLabel}
         />
         <Stat
           label="TOTAL RECEIVABLE"
@@ -1202,7 +1258,11 @@ function App() {
             const { db: next, doc } = postDocument(db, f);
             commit(next);
             setDraft(null);
-            notify("Saved. Stock and accounting updated.");
+            notify(
+              inPeriod(doc.date, period)
+                ? "Saved. Stock and accounting updated."
+                : `Saved ${doc.number}. Invoice date ${doc.date} is outside the selected reporting period.`,
+            );
             if (page === "pos") {
               setDraft(null);
               open("invoice", doc);
@@ -1391,6 +1451,16 @@ function App() {
         Head={Head}
         onExport={exportRows}
       />
+    );
+  else if (page === "licence")
+    content = (
+      <>
+        <Head
+          title="Annual Licence & Renewal"
+          sub="Each shop licence is valid for one year and is tied to this computer."
+        />
+        <LicenceSettings />
+      </>
     );
   else if (page === "settings")
     content = (
@@ -1852,6 +1922,7 @@ function App() {
                 : ""
           }
         >
+          <LicenceNotice onRenew={() => go("licence")} />
           {allowed ? (
             content
           ) : (
@@ -2060,6 +2131,14 @@ function App() {
               <div className="account-actions">
                 <Button onClick={() => open("password")}>
                   Change Password
+                </Button>
+                <Button
+                  onClick={() => {
+                    setModal(null);
+                    go("licence");
+                  }}
+                >
+                  Licence & Renewal
                 </Button>
                 <Button onClick={lockWorkspace}>Sign Out</Button>
               </div>
@@ -4201,6 +4280,7 @@ function LoginScreen({ db, selectedId, onUnlock }) {
           <Input
             label={setup || recovery ? "New Password" : "Password"}
             type="password"
+            visibilityKey={id}
             required
             minLength={setup || recovery ? 8 : undefined}
             maxLength={128}
@@ -4215,6 +4295,7 @@ function LoginScreen({ db, selectedId, onUnlock }) {
               <Input
                 label="Confirm Password"
                 type="password"
+                visibilityKey={id}
                 required
                 maxLength={128}
                 autoComplete="new-password"
@@ -4443,7 +4524,162 @@ function PeriodForm({ db, current, onApply }) {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+function LicenceSettings() {
+  const [status, setStatus] = useState(null),
+    [key, setKey] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
+  useEffect(() => {
+    window.retailDesktop
+      .licenceStatus()
+      .then(setStatus)
+      .catch((e) => setError(e.message));
+  }, []);
+  return (
+    <section className="panel licence-settings">
+      <div className="licence-details">
+        <div className="feature-icon green">
+          <Icon name="ShieldCheck" size={28} />
+        </div>
+        <h2>{status?.shop || "Retail ERP annual licence"}</h2>
+        <p>{status?.message || "Checking licence…"}</p>
+        <div className="licence-facts">
+          {[
+            ["Status", status?.state],
+            ["Licence number", status?.id],
+            ["Machine ID", status?.machineId],
+            ["Valid from", status?.starts],
+            ["Renew before", status?.expires],
+            ["Days remaining", status?.daysLeft],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <small>{label}</small>
+              <b>{value ?? "—"}</b>
+            </div>
+          ))}
+        </div>
+        {status?.nextLicence && (
+          <div className="notice">
+            Renewal is already activated for {status.nextLicence.starts} to{" "}
+            {status.nextLicence.expires}.
+          </div>
+        )}
+        <p className="small muted">
+          Ask your software provider for a new signed key each year. Renewing
+          early preserves the remainder of the current year. Records are kept
+          when a licence expires.
+        </p>
+      </div>
+      <form
+        className="licence-renew"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setError("");
+          setMessage("");
+          try {
+            const result = await window.retailDesktop.activateLicence(key);
+            setStatus(result);
+            setKey("");
+            setMessage(
+              result.nextLicence
+                ? "Your next annual renewal is activated."
+                : "Licence activated.",
+            );
+          } catch (e) {
+            setError(e.message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <h2>Activate annual renewal</h2>
+        <p>
+          Copy the Machine ID and share it with your provider. Paste the
+          complete key they give you.
+        </p>
+        <Input
+          label="Machine ID"
+          readOnly
+          value={status?.machineId || ""}
+          onFocus={(e) => e.target.select()}
+        />
+        <Field label="Licence / renewal key">
+          <textarea
+            required
+            spellCheck={false}
+            rows={6}
+            value={key}
+            placeholder="RETAIL1-…"
+            onChange={(e) => setKey(e.target.value)}
+          />
+        </Field>
+        {error && (
+          <p role="alert" className="danger-text">
+            {error}
+          </p>
+        )}
+        {message && (
+          <p role="status" className="green-text">
+            {message}
+          </p>
+        )}
+        <Button type="submit" kind="primary" disabled={busy || !key.trim()}>
+          {busy ? "Checking…" : "Activate Renewal"}
+        </Button>
+      </form>
+    </section>
+  );
+}
+function LicenceNotice({ onRenew }) {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    const check = () =>
+      window.retailDesktop
+        .licenceStatus()
+        .then(setS)
+        .catch(() => {});
+    check();
+    const interval = setInterval(check, 60000);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
+  if (!s || s.state !== "active" || s.daysLeft > 30 || s.nextLicence)
+    return null;
+  return (
+    <div className="licence-notice">
+      <span>
+        <b>Annual licence: {s.daysLeft} days remaining.</b> Renew before{" "}
+        {s.expires} to keep using Retail ERP.
+      </span>
+      <Button type="button" onClick={onRenew}>
+        Renew Licence
+      </Button>
+    </div>
+  );
+}
+
+function DesktopRequired() {
+  return (
+    <div className="login-shell">
+      <section className="login-card">
+        <div className="brand-mark">R</div>
+        <h1>Open the desktop app</h1>
+        <p>
+          Retail ERP requires its licensed desktop runtime. Open Retail ERP.app
+          to activate a licence and use your workspace.
+        </p>
+      </section>
+    </div>
+  );
+}
+createRoot(document.getElementById("root")).render(
+  window.retailDesktop ? <App /> : <DesktopRequired />,
+);
 
 if (
   import.meta.env.PROD &&

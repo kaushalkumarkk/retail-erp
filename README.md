@@ -4,7 +4,7 @@ Local-first retailer ERP built in this folder using the Rahul Jee Trading refere
 
 ## Desktop app (primary)
 
-Open `release/mac-arm64/Retail ERP.app` directly, or open the DMG in `release/` and drag **Retail ERP** into Applications. The app bundles the interface and Electron runtime; it needs no browser, local server, Node installation, or internet connection on the target computer.
+Open `release/mac-arm64/Retail ERP.app` directly, or open the DMG in `release/` and drag **Retail ERP** into Applications. Activate an annual licence before opening the workspace; see [LICENSING.md](LICENSING.md). The app bundles the interface and Electron runtime; it needs no browser, local server, Node installation, or internet connection on the target computer.
 
 Development launch:
 
@@ -117,3 +117,9 @@ On first launch, the existing administrator sets a password (8–128 characters)
 Click the top-right avatar (**Your Account**) to change your password, switch operators, or sign out. Password changes verify the current password. Admin Panel & Roles creates operators with an initial password and lets an administrator reset another operator’s password after confirming their own. Staff cannot open admin, settings or backup screens. Switching operators requires their password. Passwords are never stored as plaintext: PBKDF2-SHA256 uses a random salt and 310,000 iterations. Live sessions are held only in renderer memory; changing credentials invalidates an old session when the workspace is refreshed/synchronized.
 
 **Forgot Password?** on sign-in accepts the administrator recovery code and a new password, works offline, and issues a replacement recovery code. The old code stops working once the reset is committed. Operators without a recovery code ask an administrator for a reset. Recovery codes are stored as hashes, while the downloaded copy must be kept private. Restoring a JSON backup also restores the operators/password hashes in that backup; sign in with those credentials afterward. Business records remain localStorage data, not encrypted files.
+
+## Annual shop licensing and password visibility
+
+All password fields include accessible show/hide eye buttons (setup, sign-in, change/reset, recovery, and new operators). Passwords start hidden; the visibility button does not submit the form.
+
+Retail ERP now requires a machine-bound, signed annual licence and locks the complete business interface at expiry. The licence/renewal page and 30-day warning support yearly renewals. Read [LICENSING.md](LICENSING.md) for issuing commands, renewal timing, the local owner activation key, key custody, backup access while locked, and offline enforcement limits. Shop installers never contain the private signing key or the issuing CLI. Browser preview now displays a desktop-runtime-required screen unless a test bridge is supplied by the automated UI harness.

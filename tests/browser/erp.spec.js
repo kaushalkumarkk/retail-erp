@@ -36,6 +36,20 @@ async function unlock(page) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(
     (seed) => {
+      window.retailDesktop = {
+        assertLicensed: () => true,
+        licenceStatus: async () => ({
+          state: "active",
+          machineId: "TEST-ONLY",
+          shop: "Test workspace",
+          expires: "2099-01-01",
+          daysLeft: 1000,
+        }),
+        activateLicence: async () => {
+          throw Error("Native licence verification is required.");
+        },
+        exportLockedBackup: async () => ({ saved: false }),
+      };
       if (!localStorage.getItem("retailer-erp:v1"))
         localStorage.setItem("retailer-erp:v1", JSON.stringify(seed));
     },
@@ -357,7 +371,9 @@ test("password change, sign out, protected operator switching and admin password
     .click();
   await page.getByRole("button", { name: "Add Operator", exact: true }).click();
   await d.getByLabel("Operator Name").fill("Counter");
-  await d.getByLabel("Initial Password").fill("CounterTest!23");
+  await d
+    .getByLabel("Initial Password", { exact: true })
+    .fill("CounterTest!23");
   await d
     .getByLabel("Confirm Password", { exact: true })
     .fill("CounterTest!23");
@@ -367,9 +383,13 @@ test("password change, sign out, protected operator switching and admin password
     .filter({ hasText: "Counter" })
     .getByRole("button", { name: "Reset password", exact: true })
     .click();
-  await d.getByLabel("Your Administrator Password").fill("ChangedTest!45");
+  await d
+    .getByLabel("Your Administrator Password", { exact: true })
+    .fill("ChangedTest!45");
   await d.getByLabel("New Password", { exact: true }).fill("CounterReset!45");
-  await d.getByLabel("Confirm New Password").fill("CounterReset!45");
+  await d
+    .getByLabel("Confirm New Password", { exact: true })
+    .fill("CounterReset!45");
   await d.getByRole("button", { name: "Reset Password", exact: true }).click();
   await expect(d).toHaveCount(0);
   await page.getByTitle("Your Account", { exact: true }).click();
@@ -441,6 +461,9 @@ test("header financial year and custom dates scope registers, persist and preser
     .getByRole("combobox", { name: "Financial Year", exact: true })
     .selectOption(`${year - 1}-${String(year).slice(2)}`);
   await d.getByRole("button", { name: "Apply Period" }).click();
+  await expect(
+    page.locator(".stats.five .stat").first().locator("strong"),
+  ).toHaveText("₹20.00");
   await page
     .locator(".sidebar")
     .getByRole("button", { name: "Non-GST Invoices", exact: true })
@@ -527,4 +550,40 @@ test("administrator can recover a forgotten password offline and the old recover
       exact: true,
     }),
   ).toBeVisible();
+});
+test("password eye buttons reveal and conceal setup and sign-in fields without submitting", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const input = page.getByLabel("New Password", { exact: true });
+  await input.fill(TEST_PASSWORD);
+  await expect(input).toHaveAttribute("type", "password");
+  await page
+    .getByRole("button", { name: "Show new password", exact: true })
+    .click();
+  await expect(input).toHaveAttribute("type", "text");
+  await page
+    .getByRole("button", { name: "Hide new password", exact: true })
+    .click();
+  await expect(input).toHaveAttribute("type", "password");
+  await page
+    .getByLabel("Confirm Password", { exact: true })
+    .fill(TEST_PASSWORD);
+  await page.getByRole("button", { name: "Set Password & Continue" }).click();
+  await page.getByRole("button", { name: "Continue to Workspace" }).click();
+  await page.getByTitle("Your Account", { exact: true }).click();
+  await page.getByRole("button", { name: "Sign Out", exact: true }).click();
+  const password = page.getByLabel("Password", { exact: true });
+  await password.fill(TEST_PASSWORD);
+  await page
+    .getByRole("button", { name: "Show password", exact: true })
+    .click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(
+    page.getByRole("heading", { name: "Welcome back", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Hide password", exact: true })
+    .click();
+  await expect(password).toHaveAttribute("type", "password");
 });
