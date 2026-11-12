@@ -14,6 +14,7 @@ const fs = require("node:fs");
 const { createLicenceService } = require("./licence-core.cjs");
 const { assertProviderDirectory, readProviderRegistry } = require("./provider-registry.cjs");
 const { pathToFileURL } = require("node:url");
+const { createUpdater } = require("./updater.cjs");
 app.setName("Retail ERP");
 // This stable origin keeps localStorage consistent across app updates and installs.
 protocol.registerSchemesAsPrivileged([
@@ -114,6 +115,11 @@ else {
         setImmediate(() => mainWindow?.loadURL(origin + "/"));
       return status;
     });
+    ipcMain.handle("retail:toggle-fullscreen", (event) => {
+      if (!trusted(event)) throw Error("Invalid window request.");
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+      return mainWindow.isFullScreen();
+    });
     ipcMain.on("retail:licence-assert", (event) => {
       try {
         if (!trusted(event)) throw Error("Invalid licence request.");
@@ -147,6 +153,8 @@ else {
     });
     const enforce = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Never interrupt a page that is still loading (e.g. the first licence screen).
+      if (mainWindow.webContents.isLoading()) return;
       const active = licence.status().state === "active";
       const locked =
         new URL(mainWindow.webContents.getURL() || origin).pathname ===
@@ -236,15 +244,19 @@ else {
       mainWindow.on("closed", () => {
         mainWindow = null;
       });
-      mainWindow
-        .loadURL(
-          origin +
-            (licence.status().state === "active" ? "/" : "/licence.html"),
-        )
-        .catch((error) =>
+      const startUrl = () =>
+        origin + (licence.status().state === "active" ? "/" : "/licence.html");
+      mainWindow.loadURL(startUrl()).catch(async () => {
+        // A load can be cancelled by a redirect or a focus event; retry once
+        // before telling the user anything.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        await mainWindow.loadURL(startUrl()).catch((error) =>
           dialog.showErrorBox("Retail ERP could not start", error.message),
         );
+      });
     };
+    const updater = createUpdater(() => mainWindow);
     const template = [
       ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
       {
@@ -314,6 +326,10 @@ else {
         label: "Help",
         submenu: [
           {
+            label: "Check for Updates…",
+            click: () => updater.check(true),
+          },
+          {
             label: "About Retail ERP",
             click: () =>
               dialog.showMessageBox(mainWindow, {
@@ -328,6 +344,7 @@ else {
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
     createWindow();
+    if (app.isPackaged) setTimeout(() => updater.check(false), 15000);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });

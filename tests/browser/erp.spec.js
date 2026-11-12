@@ -719,3 +719,69 @@ test("normal shop administrator has no Superadmin register", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Annual Licence & Renewal", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Superadmin licence register" })).toHaveCount(0);
 });
+test("parties tab shows cash in/out with Pay In, print designer hides sections, no reset-test-data button", async ({
+  page,
+}) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/");
+  await unlock(page);
+  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "Add Party (F4)", exact: true }).click();
+  await dialog.getByLabel("Party Name").fill("Cash Customer");
+  await dialog.getByLabel("Opening Outstanding Balance").fill("500");
+  await dialog.getByRole("button", { name: "Save Party" }).click();
+  await page.getByRole("button", { name: "Add Item (F5)", exact: true }).click();
+  await dialog.getByLabel("Product Name").fill("Premium Rice");
+  await dialog.getByLabel("Purchase Price").fill("50");
+  await dialog.getByLabel("Sale Price").fill("70");
+  await dialog.getByLabel("Opening Stock").fill("20");
+  await dialog.getByLabel("GST %").fill("5");
+  await dialog.getByRole("button", { name: "Save Product" }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press("F6");
+  await dialog
+    .getByRole("combobox", { name: "Party *", exact: true })
+    .selectOption({ label: "Cash Customer" });
+  await dialog.getByLabel("Amount *", { exact: true }).fill("250");
+  await dialog.getByRole("button", { name: "Record Payment", exact: true }).click();
+  await page
+    .locator(".sidebar")
+    .getByRole("button", { name: "Parties (Customers/Vendors)" })
+    .click();
+  await expect(page.getByText("CASH IN (RECEIVED FROM CUSTOMERS)")).toBeVisible();
+  const row = page.getByRole("row", { name: /Cash Customer/ });
+  await expect(row).toContainText("₹250.00");
+  await row.getByRole("button", { name: "Pay In" }).click();
+  await expect(
+    dialog.getByRole("combobox", { name: "Party *", exact: true }),
+  ).toHaveValue(/.+/);
+  await dialog.getByRole("button", { name: "Close dialog" }).click();
+  await page
+    .locator(".sidebar")
+    .getByRole("button", { name: "Backup & Data Export" })
+    .click();
+  await expect(page.getByRole("button", { name: "Reset Test Data" })).toHaveCount(0);
+  await page
+    .locator(".sidebar")
+    .getByRole("button", { name: /Business Settings|Settings/ })
+    .first()
+    .click();
+  await page.getByLabel("Signature lines").uncheck();
+  await page.getByLabel("Footer note (bottom of bill)").fill("Visit again soon");
+  await page.getByRole("button", { name: "Save Settings" }).click();
+  await page
+    .locator(".sidebar")
+    .getByRole("button", { name: "Sales & Invoices" })
+    .click();
+  await page.getByRole("button", { name: "Create Invoice" }).click();
+  await page
+    .getByRole("combobox", { name: "Customer", exact: true })
+    .selectOption({ label: "Cash Customer" });
+  await page.getByRole("combobox", { name: "Add Product / Search Item" }).fill("Premium Rice");
+  await page.getByRole("option", { name: /Premium Rice/ }).click();
+  await page.getByRole("button", { name: "Save Invoice", exact: true }).click();
+  await expect(dialog.locator(".reference-footnote")).toHaveText("Visit again soon");
+  await expect(dialog.locator(".reference-signatures")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

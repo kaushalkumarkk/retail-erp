@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld(
     activateLicence: (key) =>
       ipcRenderer.invoke("retail:licence-activate", key),
     exportLockedBackup: () => ipcRenderer.invoke("retail:licence-backup"),
+    toggleFullScreen: () => ipcRenderer.invoke("retail:toggle-fullscreen"),
     assertLicensed: () => {
       const response = ipcRenderer.sendSync("retail:licence-assert");
       if (!response?.ok)

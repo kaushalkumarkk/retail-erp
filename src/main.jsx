@@ -1,4 +1,10 @@
 import { amountInWords, invoiceSummary } from "./lib/invoice-format.mjs";
+import {
+  FONTS,
+  PAPER_SIZES,
+  SHOW_OPTIONS,
+  printOptions,
+} from "./lib/print-options.mjs";
 import { version as APP_VERSION } from "../package.json";
 import React, { useEffect, useRef, useState, useId } from "react";
 import { createRoot } from "react-dom/client";
@@ -58,8 +64,10 @@ import {
   IconBuildingBank,
   IconPrinter,
   IconRefresh,
+  IconArrowsMaximize,
 } from "@tabler/icons-react";
 const Icons = {
+  IconArrowsMaximize,
   IconPackage,
   IconLayoutDashboard,
   IconBolt,
@@ -132,6 +140,8 @@ import {
   voidDocument,
   postPayment,
   documentPaid,
+  dueInfo,
+  addDays,
   voidPayment,
   postExpense,
   ledger,
@@ -311,6 +321,55 @@ function Table({ heads, children, empty }) {
     </div>
   );
 }
+const WIDGETS = [
+  ["banner", "Business banner"],
+  ["sales", "Sales in period"],
+  ["receivable", "Total receivable"],
+  ["payable", "Total payable"],
+  ["cash", "Cash & bank balance"],
+  ["overdue", "Overdue bills"],
+  ["stock", "Total stock value"],
+  ["quick", "Quick action launcher"],
+  ["trends", "Revenue & inward trends"],
+  ["lowstock", "Low stock alerts"],
+  ["recent", "Recent transactions"],
+];
+const WIDGET_KEY = "retailer-erp:dashboard-widgets";
+// A "locked" bill date stays selected for every new bill until it is unticked,
+// so a run of back-dated bills does not need the date re-entered each time.
+const DATE_LOCK_KEY = "retailer-erp:bill-date-lock";
+const lockedDate = () => {
+  try {
+    const value = localStorage.getItem(DATE_LOCK_KEY) || "";
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  } catch {
+    return "";
+  }
+};
+const allWidgets = () => Object.fromEntries(WIDGETS.map(([k]) => [k, true]));
+const loadWidgets = () => {
+  try {
+    return { ...allWidgets(), ...JSON.parse(localStorage.getItem(WIDGET_KEY) || "{}") };
+  } catch {
+    return allWidgets();
+  }
+};
+function overdueSummary(db) {
+  const out = { saleAmt: 0, saleCount: 0, buyAmt: 0, buyCount: 0, oldest: 0 };
+  for (const d of db.documents) {
+    const info = dueInfo(db, d);
+    if (!info.overdue) continue;
+    if (d.type === "sale") {
+      out.saleAmt += info.open;
+      out.saleCount += 1;
+    } else {
+      out.buyAmt += info.open;
+      out.buyCount += 1;
+    }
+    out.oldest = Math.max(out.oldest, info.days);
+  }
+  return out;
+}
 function Stat({ label, value, icon = "TrendingUp", color = "blue", note }) {
   return (
     <div className="stat panel">
@@ -444,6 +503,22 @@ function App() {
     () => sessionStorage.getItem("retailer-user") || "owner",
   );
   const [draft, setDraft] = useState(null);
+  const [formNonce, setFormNonce] = useState(0);
+  const [widgets, setWidgets] = useState(loadWidgets);
+  const [customize, setCustomize] = useState(false);
+  const setWidget = (key, value) =>
+    setWidgets((current) => {
+      const next = key === "*" ? allWidgets() : { ...current, [key]: value };
+      try {
+        localStorage.setItem(WIDGET_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  const toggleFullscreen = () => {
+    if (window.retailDesktop?.toggleFullScreen) window.retailDesktop.toggleFullScreen();
+    else if (document.fullscreenElement) document.exitFullscreen?.();
+    else document.documentElement.requestFullscreen?.();
+  };
   const [signedIn, setSignedIn] = useState(null);
   const [period, setPeriod] = useState(() => {
     try {
@@ -534,7 +609,7 @@ function App() {
       type,
       gst,
       partyId: "",
-      date: today(),
+      date: lockedDate() || today(),
       mode: "Cash",
       paid: 0,
       lines: [],
@@ -658,7 +733,33 @@ function App() {
   );
   const dashboard = () => (
     <>
-      <section className="company-banner panel">
+      <div className="dash-toolbar">
+        <Button
+          icon="Eye"
+          aria-expanded={customize}
+          onClick={() => setCustomize((value) => !value)}
+        >
+          Customize widgets
+        </Button>
+        {customize && (
+          <div className="widget-panel panel" role="group" aria-label="Dashboard widgets">
+            {WIDGETS.map(([key, label]) => (
+              <label key={key}>
+                <input
+                  type="checkbox"
+                  checked={widgets[key]}
+                  onChange={(e) => setWidget(key, e.target.checked)}
+                />
+                {label}
+              </label>
+            ))}
+            <Button type="button" onClick={() => setWidget("*")}>
+              Show all
+            </Button>
+          </div>
+        )}
+      </div>
+      {widgets.banner && <section className="company-banner panel">
         <div>
           <div className="eyebrow blue-text">YOUR BUSINESS AT A GLANCE</div>
           <h1>{db.settings.name}</h1>
@@ -675,36 +776,45 @@ function App() {
         <Badge>
           <span className="dot" /> GST accounting enabled
         </Badge>
-      </section>
-      <div className="stats five">
-        <Stat
+      </section>}
+      <div className="stats auto">
+        {widgets.sales && <Stat
           label="SALES IN SELECTED PERIOD"
           value={money(m.sales)}
           icon="TrendingUp"
           note={rangeLabel}
-        />
-        <Stat
+        />}
+        {widgets.receivable && <Stat
           label="TOTAL RECEIVABLE"
           value={money(m.receivable)}
           icon="ArrowDownLeft"
           color="green"
           note="From customers & debtors"
-        />
-        <Stat
+        />}
+        {widgets.payable && <Stat
           label="TOTAL PAYABLE"
           value={money(m.payable)}
           icon="ArrowUpRight"
           color="rose"
           note="To suppliers & creditors"
-        />
-        <Stat
+        />}
+        {widgets.cash && <Stat
           label="CASH & BANK BALANCE"
           value={money(m.cash)}
           icon="Wallet"
           color="purple"
           note="Liquid operating funds"
-        />
-        <Stat
+        />}
+        {widgets.overdue && (
+          <Stat
+            label="OVERDUE BILLS"
+            value={money(overdueSummary(db).saleAmt)}
+            icon="AlertTriangle"
+            color="rose"
+            note={`${overdueSummary(db).saleCount} customer · ${overdueSummary(db).buyCount} supplier bills past due`}
+          />
+        )}
+        {widgets.stock && <Stat
           label="TOTAL STOCK VALUE"
           value={money(m.stock)}
           icon="Package"
@@ -714,9 +824,9 @@ function App() {
               ? `${m.low.length} items need attention`
               : "Inventory healthy"
           }
-        />
+        />}
       </div>
-      <section className="panel quick">
+      {widgets.quick && <section className="panel quick">
         <div className="section-heading">
           <h2 className="eyebrow">QUICK ACTION LAUNCHER</h2>
           <span className="muted small">
@@ -755,9 +865,9 @@ function App() {
             </button>
           ))}
         </div>
-      </section>
+      </section>}
       <div className="dashboard-grid">
-        <section className="panel chart-panel">
+        {widgets.trends && <section className="panel chart-panel">
           <div className="section-heading">
             <div>
               <h2>
@@ -778,8 +888,8 @@ function App() {
             </div>
           </div>
           <Trend db={periodDb} period={period} />
-        </section>
-        <section className="panel low-stock">
+        </section>}
+        {widgets.lowstock && <section className="panel low-stock">
           <div className="section-heading">
             <div className="row">
               <span className="stat-icon amber">
@@ -814,9 +924,9 @@ function App() {
           <Button kind="full" onClick={() => go("items")}>
             Manage All Inventory <Icon name="ChevronRight" size={16} />
           </Button>
-        </section>
+        </section>}
       </div>
-      <section className="panel">
+      {widgets.recent && <section className="panel">
         <div className="section-heading padded">
           <div>
             <h2>Recent transactions</h2>
@@ -862,7 +972,7 @@ function App() {
               </tr>
             ))}
         </Table>
-      </section>
+      </section>}
     </>
   );
   let content;
@@ -977,11 +1087,23 @@ function App() {
           title="Parties Directory"
           sub="Customers, suppliers, transaction history, and outstanding balances."
         >
+          <Button
+            icon="ArrowUpRight"
+            onClick={() => open("payment", { type: "Out" })}
+          >
+            Pay Out
+          </Button>
+          <Button
+            icon="ArrowDownLeft"
+            onClick={() => open("payment", { type: "In" })}
+          >
+            Pay In
+          </Button>
           <Button kind="primary" icon="UserPlus" onClick={() => open("party")}>
             Add New Party (F4)
           </Button>
         </Head>
-        <div className="stats two">
+        <div className="stats four">
           <Stat
             label="TOTAL CUSTOMER RECEIVABLES"
             value={money(m.receivable)}
@@ -991,6 +1113,18 @@ function App() {
           <Stat
             label="TOTAL SUPPLIER PAYABLES"
             value={money(m.payable)}
+            color="rose"
+            icon="ArrowUpRight"
+          />
+          <Stat
+            label="CASH IN (RECEIVED FROM CUSTOMERS)"
+            value={money(partyCash(db.payments, "In"))}
+            color="green"
+            icon="ArrowDownLeft"
+          />
+          <Stat
+            label="CASH OUT (PAID TO SUPPLIERS)"
+            value={money(partyCash(db.payments, "Out"))}
             color="rose"
             icon="ArrowUpRight"
           />
@@ -1012,6 +1146,8 @@ function App() {
             "Contact",
             "GSTIN & State",
             "Credit Limit",
+            "Cash In",
+            "Cash Out",
             "Current Balance",
             "Actions",
           ]}
@@ -1037,8 +1173,22 @@ function App() {
                 <small>{stateName(p.state)}</small>
               </td>
               <td>{money(p.creditLimit)}</td>
+              <td>{money(partyCash(db.payments, "In", p.id))}</td>
+              <td>{money(partyCash(db.payments, "Out", p.id))}</td>
               <td>{money(balance(db, p))}</td>
               <td>
+               <div className="row">
+                <Button
+                  icon={p.type === "Customer" ? "ArrowDownLeft" : "ArrowUpRight"}
+                  onClick={() =>
+                    open("payment", {
+                      type: p.type === "Customer" ? "In" : "Out",
+                      partyId: p.id,
+                    })
+                  }
+                >
+                  {p.type === "Customer" ? "Pay In" : "Pay Out"}
+                </Button>
                 <RowActions
                   edit={() => open("party", p)}
                   remove={() =>
@@ -1061,6 +1211,7 @@ function App() {
                     })
                   }
                 />
+               </div>
               </td>
             </tr>
           )}
@@ -1102,7 +1253,19 @@ function App() {
             {purchase ? "Record Purchase Bill" : "Create Invoice"}
           </Button>
         </Head>
-        <div className="stats">
+        <div className="stats four">
+          <Stat
+            label="OVERDUE"
+            value={money(
+              docs.reduce((sum, d) => {
+                const i = dueInfo(db, d);
+                return i.overdue ? sum + i.open : sum;
+              }, 0),
+            )}
+            note={`${docs.filter((d) => dueInfo(db, d).overdue).length} bills past due date`}
+            color="rose"
+            icon="AlertTriangle"
+          />
           <Stat
             label="TOTAL BILLING"
             value={money(
@@ -1134,16 +1297,23 @@ function App() {
         </div>
         <Records
           key={`${page}-${period.from}-${period.to}`}
-          items={docs.map((d) => ({
-            ...d,
-            status: d.void
-              ? "CANCELLED"
-              : documentPaid(db, d) >= d.total
-                ? "PAID"
-                : documentPaid(db, d)
-                  ? "PARTIAL"
-                  : "UNPAID",
-          }))}
+          items={docs.map((d) => {
+            const due = dueInfo(db, d);
+            return {
+              ...d,
+              dueOn: due.due,
+              overdueDays: due.days,
+              status: d.void
+                ? "CANCELLED"
+                : documentPaid(db, d) >= d.total
+                  ? "PAID"
+                  : due.overdue
+                    ? "OVERDUE"
+                    : documentPaid(db, d)
+                      ? "PARTIAL"
+                      : "UNPAID",
+            };
+          })}
           filterKey="status"
           onExport={(r) =>
             exportRows(
@@ -1155,6 +1325,7 @@ function App() {
           heads={[
             "Invoice No",
             "Date",
+            "Due Date",
             "Party",
             "Mode",
             "Taxable",
@@ -1171,6 +1342,12 @@ function App() {
                 </button>
               </td>
               <td>{d.date}</td>
+              <td>
+                {d.void || d.status === "PAID" ? "—" : d.dueOn}
+                {d.status === "OVERDUE" && (
+                  <small className="danger-text">{d.overdueDays} days overdue</small>
+                )}
+              </td>
               <td>{d.partyName}</td>
               <td>{d.mode}</td>
               <td>{money(d.taxable)}</td>
@@ -1219,7 +1396,7 @@ function App() {
   } else if (["sale-new", "purchase-new", "pos"].includes(page))
     content = (
       <DocumentEditor
-        key={`${page}-${period.from}-${period.to}`}
+        key={`${page}-${period.from}-${period.to}-${formNonce}`}
         db={db}
         initial={
           page === "pos"
@@ -1235,7 +1412,7 @@ function App() {
             : draft || {
                 type: page === "purchase-new" ? "purchase" : "sale",
                 gst: true,
-                date: today(),
+                date: lockedDate() || today(),
                 lines: [],
                 partyId: "",
                 mode: "Cash",
@@ -1254,7 +1431,7 @@ function App() {
           })
         }
         onBack={() => go(page === "purchase-new" ? "purchases" : "sales")}
-        onSave={(f) =>
+        onSave={(f, opts) =>
           attempt(() => {
             const { db: next, doc } = postDocument(db, f);
             commit(next);
@@ -1264,6 +1441,23 @@ function App() {
                 ? "Saved. Stock and accounting updated."
                 : `Saved ${doc.number}. Invoice date ${doc.date} is outside the selected reporting period.`,
             );
+            if (opts?.again && page !== "pos") {
+              // Keep the bill date so several back-dated bills can be entered in a row.
+              setDraft({
+                type: f.type,
+                gst: f.gst,
+                partyId: "",
+                date: f.date,
+                mode: "Cash",
+                paid: 0,
+                lines: [],
+                notes: "",
+                reference: "",
+              });
+              setFormNonce((n) => n + 1);
+              notify(`Saved ${doc.number}. Ready for the next bill dated ${f.date}.`);
+              return true;
+            }
             if (page === "pos") {
               setDraft(null);
               open("invoice", doc);
@@ -1608,18 +1802,6 @@ function App() {
             </Button>
           </section>
         </div>
-        <section className="panel padded danger-zone">
-          <div>
-            <h2>Reset transaction data</h2>
-            <p>
-              Remove all products, parties, transactions, and journals. Business
-              settings and operators are preserved.
-            </p>
-          </div>
-          <Button kind="danger" onClick={() => open("reset")}>
-            Reset Test Data
-          </Button>
-        </section>
       </>
     );
   else if (page === "admin")
@@ -1863,6 +2045,18 @@ function App() {
           </Button>
           <button
             type="button"
+            className="icon-btn"
+            title="Expand / full screen (F11)"
+            aria-label="Toggle full screen"
+            onClick={toggleFullscreen}
+          >
+            <Icon name="ArrowsMaximize" size={20} />
+          </button>
+          {lockedDate() && lockedDate() !== today() && (
+            <Badge color="amber">Bill date locked: {lockedDate()}</Badge>
+          )}
+          <button
+            type="button"
             className="fy period-trigger"
             aria-label="Change financial year and date range"
             onClick={() => open("period")}
@@ -1969,7 +2163,6 @@ function App() {
               invoice: "Invoice Details",
               history: "Party Statement",
               confirm: modal.data?.title,
-              reset: "Reset Test Data",
               user: "Add Local Operator",
               switch: "Your Account",
               password: "Change Password",
@@ -2044,6 +2237,13 @@ function App() {
               party={modal.data}
               db={db}
               onInvoice={(d) => open("invoice", d)}
+              onPay={(f) =>
+                attempt(() => {
+                  commit(postPayment(db, f));
+                  notify("Payment recorded");
+                  return true;
+                })
+              }
             />
           )}
           {modal.type === "confirm" && (
@@ -2056,26 +2256,6 @@ function App() {
                 </Button>
               </div>
             </div>
-          )}
-          {modal.type === "reset" && (
-            <ResetForm
-              onReset={() =>
-                attempt(() => {
-                  download(
-                    `before-reset-${today()}.json`,
-                    JSON.stringify(db, null, 2),
-                  );
-                  commit({
-                    ...fresh(),
-                    catalogImports: db.catalogImports,
-                    settings: db.settings,
-                    users: db.users,
-                  });
-                  setModal(null);
-                  notify("Workspace reset; backup downloaded");
-                })
-              }
-            />
           )}
           {modal.type === "period" && (
             <PeriodForm
@@ -2184,28 +2364,24 @@ function App() {
   );
 }
 function Status({ d, db }) {
-  return (
-    <Badge
-      color={
-        d.void
-          ? "rose"
-          : documentPaid(db, d) >= d.total
-            ? "green"
-            : documentPaid(db, d)
-              ? "amber"
-              : "slate"
-      }
-    >
-      {d.void
-        ? "CANCELLED"
-        : documentPaid(db, d) >= d.total
-          ? "PAID"
-          : documentPaid(db, d)
-            ? "PARTIAL"
-            : "UNPAID"}
-    </Badge>
-  );
+  const paid = documentPaid(db, d) >= d.total;
+  const overdue = dueInfo(db, d).overdue;
+  const label = d.void
+    ? "CANCELLED"
+    : paid
+      ? "PAID"
+      : overdue
+        ? "OVERDUE"
+        : documentPaid(db, d)
+          ? "PARTIAL"
+          : "UNPAID";
+  const color = d.void || overdue ? "rose" : paid ? "green" : documentPaid(db, d) ? "amber" : "slate";
+  return <Badge color={color}>{label}</Badge>;
 }
+const partyCash = (payments, type, partyId) =>
+  payments
+    .filter((x) => x.type === type && !x.void && (!partyId || x.partyId === partyId))
+    .reduce((sum, x) => sum + Number(x.amount || 0), 0);
 function RowActions({ edit, remove }) {
   return (
     <div className="row">
@@ -2601,7 +2777,7 @@ function MasterForm({ type, data, onSave, onCancel, lockPartyType = false }) {
 function PaymentForm({ db, initial, onSave }) {
   const [f, setF] = useState({
     type: initial?.type || "In",
-    partyId: "",
+    partyId: initial?.partyId || "",
     amount: "",
     mode: "Cash",
     date: today(),
@@ -2860,7 +3036,15 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
     [q, setQ] = useState(""),
     [showProducts, setShowProducts] = useState(false),
     [highlight, setHighlight] = useState(0),
-    [fullPaid, setFullPaid] = useState(Boolean(pos) && initial.mode !== "Credit");
+    [fullPaid, setFullPaid] = useState(Boolean(pos) && initial.mode !== "Credit"),
+    [lock, setLock] = useState(() => !pos && Boolean(lockedDate()));
+  useEffect(() => {
+    if (pos) return;
+    try {
+      if (lock && f.date) localStorage.setItem(DATE_LOCK_KEY, f.date);
+      else localStorage.removeItem(DATE_LOCK_KEY);
+    } catch {}
+  }, [lock, f.date, pos]);
   const purchase = f.type === "purchase";
   const credit = f.mode === "Credit";
   const party = db.parties.find((p) => p.id === f.partyId);
@@ -2916,9 +3100,9 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
       ...f,
       lines: f.lines.map((l, j) => (j === index ? { ...l, [key]: v } : l)),
     });
-  const submit = (e) => {
-    e.preventDefault();
-    const result = onSave({ ...f, paid: paidAmount });
+  const submit = (e, again = false) => {
+    e?.preventDefault();
+    const result = onSave({ ...f, paid: paidAmount }, { again });
     if (result && pos) {
       setF({ ...initial, lines: [], partyId: "", paid: 0, loadingCharge: 0, billDiscount: 0 });
       setFullPaid(Boolean(pos) && initial.mode !== "Credit");
@@ -2962,7 +3146,23 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
           </Button>
         </div>
       </div>
-      <form className="transaction-form" onSubmit={submit}>
+      <form
+        className="transaction-form"
+        onSubmit={submit}
+        onKeyDown={(e) => {
+          if (
+            (e.ctrlKey || e.metaKey) &&
+            e.key === "Enter" &&
+            !pos &&
+            f.lines.length &&
+            !calculationError &&
+            !(credit && !party)
+          ) {
+            e.preventDefault();
+            submit(null, true);
+          }
+        }}
+      >
         <section className="product-entry" aria-label="Add products">
           <div className="product-search-box">
             <span className="search-symbol">
@@ -3235,6 +3435,13 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
                 value={f.date}
                 onChange={(e) => setF({ ...f, date: e.target.value })}
               />
+              <Input
+                label="Due Date (optional)"
+                type="date"
+                min={f.date}
+                value={f.dueDate || ""}
+                onChange={(e) => setF({ ...f, dueDate: e.target.value })}
+              />
               {purchase && (
                 <Input
                   label="Supplier Bill Reference"
@@ -3250,6 +3457,25 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
                 <option value="true">GST Invoice</option>
                 <option value="false">Non-GST Invoice</option>
               </Select>
+            </div>
+            <div className="row date-quick">
+              <span className="small muted">Bill date:</span>
+              {[["Today", 0], ["Yesterday", 1], ["7 days ago", 7]].map(([label, back]) => (
+                <Button key={label} type="button" onClick={() => setF({ ...f, date: addDays(today(), -back) })}>
+                  {label}
+                </Button>
+              ))}
+              {f.date < today() && <Badge color="amber">Back-dated bill</Badge>}
+              {!pos && (
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={lock}
+                    onChange={(e) => setLock(e.target.checked)}
+                  />{" "}
+                  Keep this date for new bills
+                </label>
+              )}
             </div>
             <Input
               label="Notes / Terms"
@@ -3371,6 +3597,16 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
                   ? "Save Purchase Bill"
                   : "Save Invoice"}
             </Button>
+            {!pos && (
+              <Button
+                type="button"
+                icon="Plus"
+                disabled={!f.lines.length || Boolean(calculationError) || (credit && !party)}
+                onClick={() => submit(null, true)}
+              >
+                Save & New Bill (Ctrl+Enter)
+              </Button>
+            )}
             <div className="save-hint">
               <Icon name="ShieldCheck" size={16} /> Saved locally on this device
             </div>
@@ -3785,6 +4021,181 @@ function Reports({ db, period, page, Head, onExport }) {
     </>
   );
 }
+function PrintDesigner({ s, setS }) {
+  const o = printOptions(s);
+  const [error, setError] = useState("");
+  const setP = (patch) =>
+    setS((prev) => ({ ...prev, print: { ...(prev.print || {}), ...patch } }));
+  const setIn = (group, key, value) =>
+    setS((prev) => ({
+      ...prev,
+      print: {
+        ...(prev.print || {}),
+        [group]: { ...(prev.print?.[group] || {}), [key]: value },
+      },
+    }));
+  const onLogo = (file) => {
+    setError("");
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type))
+      return setError("Choose a PNG, JPG or WebP image.");
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 500 / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      setP({ logo: canvas.toDataURL("image/png") });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => {
+      setError("That image could not be read.");
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  };
+  return (
+    <div className="print-designer">
+      <fieldset>
+        <legend>Logo</legend>
+        <div className="logo-row">
+          {o.logo && <img src={o.logo} alt="Shop logo preview" />}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            aria-label="Upload shop logo"
+            onChange={(e) => {
+              onLogo(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          {o.logo && (
+            <Button type="button" onClick={() => setP({ logo: "" })}>
+              Remove logo
+            </Button>
+          )}
+        </div>
+        {error && <p className="small danger-text">{error}</p>}
+        <div className="form-grid">
+          <Input
+            label="Logo height (px)"
+            type="number"
+            min="20"
+            max="160"
+            value={s.print?.logoHeight ?? o.logoHeight}
+            onChange={(e) => setP({ logoHeight: Number(e.target.value) })}
+          />
+          <Select
+            label="Logo position"
+            value={o.logoAlign}
+            onChange={(e) => setP({ logoAlign: e.target.value })}
+          >
+            <option value="left">Left</option>
+            <option value="center">Center</option>
+            <option value="right">Right</option>
+          </Select>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Colour, font and paper</legend>
+        <div className="form-grid">
+          <Field label="Accent colour (headings, table header, total)">
+            <input
+              type="color"
+              value={o.accent}
+              onChange={(e) => setP({ accent: e.target.value })}
+            />
+          </Field>
+          <Select
+            label="Font"
+            value={o.font}
+            onChange={(e) => setP({ font: e.target.value })}
+          >
+            {FONTS.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
+          </Select>
+          <Input
+            label="Text size (A4 / A5, px)"
+            type="number"
+            min="8"
+            max="18"
+            value={s.print?.fontSize ?? o.fontSize}
+            onChange={(e) => setP({ fontSize: Number(e.target.value) })}
+          />
+          <Input
+            label="Page margin (A4 / A5, mm)"
+            type="number"
+            min="0"
+            max="30"
+            value={s.print?.margin ?? o.margin}
+            onChange={(e) => setP({ margin: Number(e.target.value) })}
+          />
+          <Select
+            label="Paper size for printing"
+            value={s.print?.paper || ""}
+            onChange={(e) => setP({ paper: e.target.value })}
+          >
+            <option value="">Same as default print format</option>
+            {PAPER_SIZES.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
+          </Select>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Titles and wording</legend>
+        <div className="form-grid">
+          <Input label="GST invoice title" value={s.print?.titles?.tax ?? o.titles.tax} onChange={(e) => setIn("titles", "tax", e.target.value)} />
+          <Input label="Non-GST invoice title" value={s.print?.titles?.plain ?? o.titles.plain} onChange={(e) => setIn("titles", "plain", e.target.value)} />
+          <Input label="Purchase bill title" value={s.print?.titles?.purchase ?? o.titles.purchase} onChange={(e) => setIn("titles", "purchase", e.target.value)} />
+          {[
+            ["billTo", "Customer heading"],
+            ["supplier", "Supplier heading"],
+            ["number", "Invoice number label"],
+            ["date", "Date label"],
+            ["mode", "Payment mode label"],
+            ["status", "Status label"],
+            ["terms", "Terms heading"],
+            ["customerSign", "Left signature caption"],
+            ["ownerSign", "Right signature caption"],
+          ].map(([key, label]) => (
+            <Input key={key} label={label} value={s.print?.labels?.[key] ?? o.labels[key]} onChange={(e) => setIn("labels", key, e.target.value)} />
+          ))}
+          <Field label="Header note (under shop address)">
+            <textarea rows="2" value={s.print?.headerNote ?? ""} onChange={(e) => setP({ headerNote: e.target.value })} />
+          </Field>
+          <Field label="Footer note (bottom of bill)">
+            <textarea rows="2" value={s.print?.footerNote ?? ""} onChange={(e) => setP({ footerNote: e.target.value })} />
+          </Field>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Show or hide on the bill</legend>
+        <div className="checks">
+          {SHOW_OPTIONS.map(([key, label]) => (
+            <label key={key}>
+              <input
+                type="checkbox"
+                checked={o.show[key]}
+                onChange={(e) => setIn("show", key, e.target.checked)}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="row">
+          <Button type="button" onClick={() => setS((prev) => ({ ...prev, print: undefined }))}>
+            Reset print design to default
+          </Button>
+        </div>
+      </fieldset>
+      <p className="small muted">Open any invoice from Sales & Invoices to see your changes, then use Print / Save PDF.</p>
+    </div>
+  );
+}
 function Settings({ db, onSave }) {
   const [s, setS] = useState(db.settings);
   const input = (k, label, type = "text") => (
@@ -3884,18 +4295,19 @@ function Settings({ db, onSave }) {
         <div className="settings-label">
           <Icon name="Printer" size={26} />
           <h2>Invoice Customization</h2>
-          <p>Choose your numbering series and print format.</p>
+          <p>Numbering series, default paper size, and full control over what your printed bill looks like.</p>
         </div>
         <div className="form-grid">
           {input("prefix", "Invoice Prefix Series")}
+          {input("creditDays", "Credit days before a bill is overdue", "number")}
           <Select
             label="Default Print Format"
             value={s.printFormat}
             onChange={(e) => setS({ ...s, printFormat: e.target.value })}
           >
-            <option value="A4">A4 Standard Sheet</option>
-            <option value="80mm">80mm Thermal Receipt</option>
-            <option value="58mm">58mm Compact Receipt</option>
+            {PAPER_SIZES.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
           </Select>
           <Field label="Default Terms & Conditions">
             <textarea
@@ -3905,6 +4317,7 @@ function Settings({ db, onSave }) {
             />
           </Field>
         </div>
+        <PrintDesigner s={s} setS={setS} />
       </section>
       <div className="form-footer">
         <Button kind="primary" icon="DeviceFloppy" type="submit">
@@ -3917,77 +4330,223 @@ function Settings({ db, onSave }) {
 function Invoice({ doc: d, settings: s, db }) {
   const party = db.parties.find((p) => p.id === d.partyId);
   const summary = invoiceSummary(db, d);
+  const o = printOptions(s);
+  const show = o.show;
+  const paper = o.paper;
+  const sheet = paper === "A4" || paper === "A5";
   const number = (value) => Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const date = new Date(`${d.date}T12:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  const title = d.type === "purchase" ? "PURCHASE BILL" : d.gst ? "TAX INVOICE" : "INVOICE";
+  const title = d.type === "purchase" ? o.titles.purchase : d.gst ? o.titles.tax : o.titles.plain;
+  const tail = (show.unit ? 1 : 0) + (show.rate ? 1 : 0);
+  const heads = [
+    show.serial && "#",
+    "Item name",
+    "Quantity",
+    show.unit && "Unit",
+    show.rate && "Price/ Unit",
+    "Amount",
+  ].filter(Boolean);
   return (
     <>
-      <style media="print">{`@page { size: ${s.printFormat === "A4" ? "A4" : "auto"}; margin: ${s.printFormat === "A4" ? "10mm" : "3mm"}; }`}</style>
+      <style media="print">{`@page { size: ${sheet ? paper : "auto"}; margin: ${sheet ? o.margin : 3}mm; }`}</style>
       <div className="invoice-actions">
         <Badge color={d.void ? "rose" : "blue"}>{d.void ? "CANCELLED" : title}</Badge>
         <Button icon="Printer" kind="primary" onClick={() => window.print()}>Print / Save PDF</Button>
       </div>
-      <article className={`print-invoice reference-invoice format-${s.printFormat}`}>
+      <article
+        className={`print-invoice reference-invoice format-${paper}${show.serial ? " has-serial" : ""}`}
+        style={{ "--invoice-teal": o.accent, fontFamily: o.font, ...(sheet ? { fontSize: `${o.fontSize}px` } : {}) }}
+      >
         <header className="reference-brand">
+          {o.logo && <img className={`reference-logo align-${o.logoAlign}`} src={o.logo} alt="" style={{ height: `${o.logoHeight}px` }} />}
           <h2>{s.name}</h2>
           {s.address && <p>{s.address}</p>}
-          {(s.gstin || s.phone) && <p>{[s.gstin && `GSTIN: ${s.gstin}`, s.phone && `Contact: ${s.phone}`].filter(Boolean).join(" · ")}</p>}
+          {((show.gstin && s.gstin) || (show.phone && s.phone)) && <p>{[show.gstin && s.gstin && `GSTIN: ${s.gstin}`, show.phone && s.phone && `Contact: ${s.phone}`].filter(Boolean).join(" · ")}</p>}
+          {o.headerNote && <p>{o.headerNote}</p>}
         </header>
         <div className="reference-top">
           <section className="reference-customer">
-            <b>{d.type === "purchase" ? "Supplier" : "Bill To"}</b>
+            <b>{d.type === "purchase" ? o.labels.supplier : o.labels.billTo}</b>
             <h3>{d.partyName}</h3>
-            {(d.partyAddress ?? party?.address) && <p>{d.partyAddress ?? party?.address}</p>}
-            {(d.partyPhone ?? party?.phone) && <p>Contact No. : <b>{d.partyPhone ?? party?.phone}</b></p>}
-            <p>State: <b>{stateName(d.partyState)}</b></p>
-            {d.partyGstin && <p>GSTIN: {d.partyGstin}</p>}
+            {show.partyAddress && (d.partyAddress ?? party?.address) && <p>{d.partyAddress ?? party?.address}</p>}
+            {show.partyPhone && (d.partyPhone ?? party?.phone) && <p>Contact No. : <b>{d.partyPhone ?? party?.phone}</b></p>}
+            {show.partyState && <p>State: <b>{stateName(d.partyState)}</b></p>}
+            {show.partyGstin && d.partyGstin && <p>GSTIN: {d.partyGstin}</p>}
           </section>
-          <h2 className="reference-title">{d.void ? "CANCELLED" : title}</h2>
+          <h2 className="reference-title" style={{ color: o.accent }}>{d.void ? "CANCELLED" : title}</h2>
           <section className="reference-details">
-            <small>INVOICE NUMBER</small><strong>{d.number}</strong>
-            <small>INVOICE DATE</small><b>{date}</b>
-            <small>PAYMENT MODE</small><b className="reference-mode">{d.mode === "Credit" ? "Credit / Udhaar" : d.mode}</b>
-            <small>INVOICE STATUS</small><b className={`reference-status status-${summary.status.toLowerCase().replaceAll(" ", "-")}`}>{summary.status}</b>
-            {d.reference && <p>Reference: {d.reference}</p>}
+            <small>{o.labels.number}</small><strong>{d.number}</strong>
+            <small>{o.labels.date}</small><b>{date}</b>
+            {show.mode && <><small>{o.labels.mode}</small><b className="reference-mode">{d.mode === "Credit" ? "Credit / Udhaar" : d.mode}</b></>}
+            {show.status && <><small>{o.labels.status}</small><b className={`reference-status status-${summary.status.toLowerCase().replaceAll(" ", "-")}`}>{summary.status}</b></>}
+            {show.reference && d.reference && <p>Reference: {d.reference}</p>}
           </section>
         </div>
         <div className="reference-items">
           <table aria-label="Invoice items">
-            <thead><tr>{["#", "Item name", "Quantity", "Unit", "Price/ Unit", "Amount"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+            <thead><tr>{heads.map((h) => <th key={h}>{h}</th>)}</tr></thead>
             <tbody>{d.lines.map((l, i) => <tr key={i}>
-              <td>{i + 1}</td><td><b>{l.name}</b>{d.gst && <small>HSN: {l.hsn || "—"} · GST {l.gstRate}%</small>}{l.discount > 0 && <small>Discount: {l.discount}%</small>}</td>
-              <td><b>{l.qty}</b></td><td>{l.unit}</td><td>{number(l.rate)}</td><td><b>{number(l.itemTaxable ?? l.taxable)}</b></td>
+              {show.serial && <td>{i + 1}</td>}<td><b>{l.name}</b>{d.gst && show.hsn && <small>HSN: {l.hsn || "—"} · GST {l.gstRate}%</small>}{show.discount && l.discount > 0 && <small>Discount: {l.discount}%</small>}</td>
+              <td><b>{l.qty}</b></td>{show.unit && <td>{l.unit}</td>}{show.rate && <td>{number(l.rate)}</td>}<td><b>{number(l.itemTaxable ?? l.taxable)}</b></td>
             </tr>)}</tbody>
-            <tfoot><tr><td colSpan="2">Total</td><td>{round(d.lines.reduce((sum, l) => sum + Number(l.qty), 0))}</td><td colSpan="2"></td><td>{money(d.subtotal ?? d.taxable)}</td></tr></tfoot>
+            <tfoot><tr><td colSpan={show.serial ? 2 : 1}>Total</td><td>{round(d.lines.reduce((sum, l) => sum + Number(l.qty), 0))}</td>{tail > 0 && <td colSpan={tail}></td>}<td>{money(d.subtotal ?? d.taxable)}</td></tr></tfoot>
           </table>
         </div>
         <div className="reference-summary">
           <div className="reference-notes">
-            <div><b>TOTAL BALANCE <strong className="reference-balance">{money(summary.totalBalance)}</strong></b><small>(Previous Due: {money(summary.previousDue)} + Current Bill Due: {money(summary.due)})</small><small>Balances reflect current payment allocations.</small></div>
-            <div className="reference-words"><small>AMOUNT IN WORDS:</small><b><i>{amountInWords(d.total)}</i></b></div>
-            {(s.bank || s.upi) && <div className="reference-payment"><b>Payment Details</b><p>{[s.bank, s.account && `A/C ${s.account}`, s.ifsc && `IFSC ${s.ifsc}`, s.branch].filter(Boolean).join(" · ")}</p>{s.upi && <p>UPI: {s.upi}</p>}</div>}
-            <div className="reference-terms"><h3>Terms and Conditions</h3><p>{d.notes || s.terms}</p></div>
+            {show.balances && <div><b>TOTAL BALANCE <strong className="reference-balance">{money(summary.totalBalance)}</strong></b><small>(Previous Due: {money(summary.previousDue)} + Current Bill Due: {money(summary.due)})</small><small>Balances reflect current payment allocations.</small></div>}
+            {show.amountWords && <div className="reference-words"><small>AMOUNT IN WORDS:</small><b><i>{amountInWords(d.total)}</i></b></div>}
+            {show.paymentDetails && (s.bank || s.upi) && <div className="reference-payment"><b>Payment Details</b><p>{[s.bank, s.account && `A/C ${s.account}`, s.ifsc && `IFSC ${s.ifsc}`, s.branch].filter(Boolean).join(" · ")}</p>{s.upi && <p>UPI: {s.upi}</p>}</div>}
+            {show.terms && <div className="reference-terms"><h3>{o.labels.terms}</h3><p>{d.notes || s.terms}</p></div>}
           </div>
           <div className="reference-totals">
             <div><span>Sub Total</span><b>{money(d.subtotal ?? d.taxable)}</b></div>
             {d.billDiscount > 0 && <div className="invoice-discount"><span>Discount</span><b>−{money(d.billDiscount)}</b></div>}
             {d.loadingCharge > 0 && <div className="invoice-loading"><span>LOADING CHARGE:</span><b>{money(d.loadingCharge)}</b></div>}
-            {d.gst && [["CGST", d.cgst], ["SGST", d.sgst], ["IGST", d.igst]].filter(([, value]) => value > 0).map(([label, value]) => <div key={label}><span>{label}</span><b>{money(value)}</b></div>)}
+            {d.gst && show.taxBreakup && [["CGST", d.cgst], ["SGST", d.sgst], ["IGST", d.igst]].filter(([, value]) => value > 0).map(([label, value]) => <div key={label}><span>{label}</span><b>{money(value)}</b></div>)}
             <div className="reference-grand"><span>Total</span><b>{money(d.total)}</b></div>
-            <div><span>Received</span><span>{money(summary.received)}</span></div>
-            <div><span>Previous Due</span><span>{money(summary.previousDue)}</span></div>
-            <div className="reference-balance"><b>Total Balance</b><b>{money(summary.totalBalance)}</b></div>
+            {show.receivedDue && <>
+              <div><span>Received</span><span>{money(summary.received)}</span></div>
+              <div><span>Previous Due</span><span>{money(summary.previousDue)}</span></div>
+              <div className="reference-balance"><b>Total Balance</b><b>{money(summary.totalBalance)}</b></div>
+            </>}
           </div>
         </div>
-        <footer className="reference-signatures">
-          <div><p>Customer's Signature</p><b>Receiver's Signature</b></div>
-          <div><strong>For {s.name}</strong><b>Authorized Signatory</b></div>
-        </footer>
+        {show.signatures && <footer className="reference-signatures">
+          <div><p>Customer's Signature</p><b>{o.labels.customerSign}</b></div>
+          <div><strong>For {s.name}</strong><b>{o.labels.ownerSign}</b></div>
+        </footer>}
+        {o.footerNote && <p className="reference-footnote">{o.footerNote}</p>}
       </article>
     </>
   );
 }
-function PartyHistory({ party: p, db, onInvoice }) {
+function PartyPayment({ party: p, db, onPay }) {
+  const isCustomer = p.type === "Customer";
+  const outstanding = balance(db, p);
+  const bills = db.documents
+    .filter((d) => d.partyId === p.id && !d.void)
+    .map((d) => ({ d, open: round(d.total - documentPaid(db, d)) }))
+    .filter((x) => x.open > 0)
+    .sort(
+      (a, b) =>
+        b.d.date.localeCompare(a.d.date) ||
+        b.d.createdAt.localeCompare(a.d.createdAt),
+    );
+  const openingPaid = db.payments
+    .filter((x) => x.partyId === p.id && !x.void)
+    .reduce(
+      (sum, x) =>
+        sum +
+        (x.allocations || [])
+          .filter((a) => a.documentId === "opening")
+          .reduce((t, a) => t + a.amount, 0),
+      0,
+    );
+  const openingDue = Math.max(0, round(Number(p.opening || 0) - openingPaid));
+  const [f, setF] = useState({
+    amount: "",
+    mode: "Cash",
+    date: lockedDate() || today(),
+    reference: "",
+    applyTo: "",
+  });
+  const target =
+    f.applyTo === "opening"
+      ? openingDue
+      : f.applyTo
+        ? bills.find((x) => x.d.id === f.applyTo)?.open ?? 0
+        : outstanding;
+  if (outstanding <= 0)
+    return (
+      <p className="small muted">
+        Nothing outstanding for this {p.type.toLowerCase()}, so no{" "}
+        {isCustomer ? "Pay In" : "Pay Out"} is due.
+      </p>
+    );
+  return (
+    <form
+      className="party-pay panel"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (onPay({ ...f, partyId: p.id }))
+          setF((current) => ({ ...current, amount: "", reference: "" }));
+      }}
+    >
+      <h3>
+        {isCustomer
+          ? "Pay In · receive money from this customer"
+          : "Pay Out · pay money to this supplier"}
+      </h3>
+      <div className="form-grid">
+        <Input
+          label="Amount (₹)"
+          type="number"
+          min="0.01"
+          step="0.01"
+          max={target}
+          required
+          value={f.amount}
+          onChange={(e) => setF({ ...f, amount: e.target.value })}
+        />
+        <Select
+          label="Apply to"
+          value={f.applyTo}
+          onChange={(e) => setF({ ...f, applyTo: e.target.value, amount: "" })}
+        >
+          <option value="">Oldest dues first (automatic)</option>
+          {bills.map(({ d, open }) => (
+            <option key={d.id} value={d.id}>
+              {d.number} · {d.date} · due {money(open)}
+            </option>
+          ))}
+          {openingDue > 0 && (
+            <option value="opening">Opening balance only · due {money(openingDue)}</option>
+          )}
+        </Select>
+        <Select
+          label="Payment Mode"
+          value={f.mode}
+          onChange={(e) => setF({ ...f, mode: e.target.value })}
+        >
+          {["Cash", "UPI", "Card", "Bank", "Cheque"].map((m) => (
+            <option key={m}>{m}</option>
+          ))}
+        </Select>
+        <Input
+          label="Date"
+          type="date"
+          required
+          value={f.date}
+          onChange={(e) => setF({ ...f, date: e.target.value })}
+        />
+        <Input
+          label="Reference (optional)"
+          value={f.reference}
+          onChange={(e) => setF({ ...f, reference: e.target.value })}
+        />
+      </div>
+      <p className="small muted">
+        {f.applyTo
+          ? "Only the selected item is settled. Older dues stay unchanged."
+          : "Pays the oldest dues first."}{" "}
+        Maximum for this choice: <b>{money(target)}</b>
+      </p>
+      <div className="row">
+        <Button
+          type="button"
+          onClick={() => setF({ ...f, amount: String(target) })}
+        >
+          Fill {money(target)}
+        </Button>
+        <Button kind="primary" type="submit" icon={isCustomer ? "ArrowDownLeft" : "ArrowUpRight"}>
+          Record {isCustomer ? "Pay In" : "Pay Out"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+function PartyHistory({ party: p, db, onInvoice, onPay }) {
   const docs = db.documents.filter((d) => d.partyId === p.id);
   const payments = db.payments.filter((x) => x.partyId === p.id);
   const events = [
@@ -4033,6 +4592,7 @@ function PartyHistory({ party: p, db, onInvoice }) {
       <p>
         Opening outstanding: <b>{money(p.opening)}</b>
       </p>
+      {onPay && <PartyPayment party={p} db={db} onPay={onPay} />}
       <Table
         heads={["Date", "Reference", "Description", "Billed", "Paid"]}
         empty={!events.length && <Empty title="No transactions yet" />}
@@ -4055,28 +4615,6 @@ function PartyHistory({ party: p, db, onInvoice }) {
           </tr>
         ))}
       </Table>
-    </div>
-  );
-}
-function ResetForm({ onReset }) {
-  const [value, setValue] = useState("");
-  return (
-    <div className="modal-body">
-      <p>
-        This removes products, parties, transactions, and accounting records.
-        Your business settings and operators are kept. A backup downloads before
-        reset.
-      </p>
-      <Input
-        label="Type RESET to continue"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-      />
-      <div className="form-footer">
-        <Button kind="danger" disabled={value !== "RESET"} onClick={onReset}>
-          Reset Workspace
-        </Button>
-      </div>
     </div>
   );
 }

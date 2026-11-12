@@ -51,7 +51,7 @@ The desktop uses the medical ERP’s white/green screen style, compact tables, f
 - Products: categories, HSN, unique barcodes, units, purchase/sale rates, GST percentage, opening stock, stock adjustments, reorder levels.
 - Payments and expenses: customer collections, supplier payouts, modes and references, expense categories and local input tax.
 - Accounting: balanced automatic journals, trial balance, profit/loss, GST outward/summary/HSN working reports, date filters and CSV exports.
-- Business settings, bank/UPI text details on invoices, local operator profiles, full JSON backup/restore, CSV inventory import, guarded reset.
+- Business settings, bank/UPI text details on invoices, local operator profiles, full JSON backup/restore, CSV inventory import, print design (logo, colours, fonts, sections, paper size).
 - Shortcuts: F1 new sale, F4 new party, F5 new item, F6 payment, Ctrl/Cmd+K search, Escape closes dialogs.
 
 ## Bring your inventory

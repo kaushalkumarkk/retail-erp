@@ -38,6 +38,7 @@ export const fresh = () => ({
     prefix: "INV",
     printFormat: "A4",
     terms: "Thank you for your business.",
+    creditDays: 30,
     openingCash: 0,
   },
   items: [],
@@ -310,6 +311,8 @@ export function postDocument(state, input) {
       throw Error("Credit / Udhaar bills cannot include a payment. Choose the received payment mode for partial payments.");
   }
   if (paid > calc.total) throw Error("Paid amount cannot exceed the total.");
+  if (input.dueDate && input.dueDate < (input.date || today()))
+    throw Error("Due date cannot be before the invoice date.");
   if (!party && paid < calc.total)
     throw Error("Select a customer for a credit invoice.");
   if (
@@ -519,27 +522,46 @@ export function postPayment(state, input) {
           .reduce((s, a) => s + a.amount, 0),
       0,
     );
-  const opening = Math.min(
-    remaining,
-    Math.max(0, Number(p.opening || 0) - priorOpeningPaid),
-  );
+  const openingDue = Math.max(0, Number(p.opening || 0) - priorOpeningPaid);
   const allocations = [];
-  if (opening) {
-    allocations.push({ documentId: "opening", amount: opening });
-    remaining = round(remaining - opening);
-  }
-  for (const d of db.documents
-    .filter((d) => d.partyId === p.id && !d.void)
-    .sort(
-      (a, b) =>
-        a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt),
-    )) {
-    const part = Math.min(remaining, round(d.total - documentPaid(db, d)));
-    if (part > 0) {
-      allocations.push({ documentId: d.id, amount: part });
-      remaining = round(remaining - part);
+  // applyTo: "" = oldest dues first (automatic), "opening" = only the opening
+  // balance, otherwise the id of one bill. Choosing a target settles only that
+  // target, so a fresh bill can be paid without touching older dues.
+  const applyTo = input.applyTo || "";
+  if (applyTo === "opening") {
+    if (amount > round(openingDue))
+      throw Error(`Payment exceeds the opening balance due (${round(openingDue)}).`);
+    allocations.push({ documentId: "opening", amount });
+    remaining = 0;
+  } else if (applyTo) {
+    const target = db.documents.find(
+      (d) => d.id === applyTo && d.partyId === p.id && !d.void,
+    );
+    if (!target) throw Error("Choose one of this party's open bills.");
+    const open = round(target.total - documentPaid(db, target));
+    if (amount > open)
+      throw Error(`Payment exceeds the balance of ${target.number} (${open}).`);
+    allocations.push({ documentId: target.id, amount });
+    remaining = 0;
+  } else {
+    const opening = Math.min(remaining, openingDue);
+    if (opening) {
+      allocations.push({ documentId: "opening", amount: opening });
+      remaining = round(remaining - opening);
     }
-    if (remaining <= 0) break;
+    for (const d of db.documents
+      .filter((d) => d.partyId === p.id && !d.void)
+      .sort(
+        (a, b) =>
+          a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt),
+      )) {
+      const part = Math.min(remaining, round(d.total - documentPaid(db, d)));
+      if (part > 0) {
+        allocations.push({ documentId: d.id, amount: part });
+        remaining = round(remaining - part);
+      }
+      if (remaining <= 0) break;
+    }
   }
   receipt.allocations = allocations;
   db.payments.push(receipt);
@@ -793,4 +815,24 @@ export function importItems(db, text) {
     });
   }
   return next;
+}
+
+// Overdue tracking: a bill is overdue when money is still open after its due
+// date. The due date is set on the bill, or defaults to bill date + credit days.
+export function addDays(date, days) {
+  const d = new Date(`${date}T12:00:00`);
+  d.setDate(d.getDate() + Number(days || 0));
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+export function dueInfo(db, doc, now = today()) {
+  if (!doc || doc.void) return { due: "", days: 0, open: 0, overdue: false };
+  const open = round(doc.total - documentPaid(db, doc));
+  const credit = Number(db.settings?.creditDays);
+  const due = doc.dueDate || addDays(doc.date, Number.isFinite(credit) ? credit : 30);
+  const days = Math.max(
+    0,
+    Math.round((new Date(`${now}T12:00:00`) - new Date(`${due}T12:00:00`)) / 86400000),
+  );
+  return { due, days, open, overdue: open > 0.004 && due < now };
 }

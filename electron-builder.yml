@@ -7,6 +7,11 @@ files:
   - dist/**
   - electron/**
   - package.json
+publish:
+  provider: github
+  owner: shivamraj-2003
+  repo: reatail-erp
+  releaseType: release
 asar: true
 npmRebuild: false
 mac:

@@ -573,8 +573,8 @@ input[type="date"] {
 }
 main {
   padding: 30px 32px 0;
-  max-width: 1900px;
-  margin: auto;
+  max-width: none;
+  margin: 0;
 }
 .panel {
   background: var(--surface);
@@ -632,6 +632,19 @@ main {
 .stats.two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.stats.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.stats.auto {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.dash-toolbar { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; margin-bottom: 14px; }
+.widget-panel { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 18px; padding: 14px 18px; width: 100%; }
+.widget-panel label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.date-quick { gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0 10px; }
+.date-quick .btn { padding: 4px 10px; font-size: 12px; }
+.form-footer-actions { display: grid; gap: 8px; }
+
 .stat {
   padding: 19px 17px;
 }
@@ -1989,6 +2002,7 @@ tbody tr:hover {
   }
   .stats,
   .stats.five,
+  .stats.four,
   .stats.two {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
@@ -4059,6 +4073,19 @@ td small {
 .reference-invoice small { display: block; color: #64748b; font-size: 10px; }
 .reference-invoice .reference-brand { text-align: left; border-bottom: 4px solid var(--invoice-teal); padding-bottom: 12px; }
 .reference-invoice .reference-brand h2 { color: #111827; font-size: 25px; margin: 0; }
+.reference-invoice .reference-logo { display: block; max-width: 100%; width: auto; object-fit: contain; margin: 0 0 8px; }
+.reference-invoice .reference-logo.align-center { margin-left: auto; margin-right: auto; }
+.reference-invoice .reference-logo.align-right { margin-left: auto; }
+.reference-invoice .reference-footnote { margin-top: 14px; text-align: center; color: #475569; }
+.reference-invoice.format-A5 { font-size: 11px; }
+.print-designer { display: grid; gap: 18px; }
+.print-designer fieldset { border: 1px solid #d8e7e2; border-radius: 12px; padding: 14px 16px; margin: 0; }
+.print-designer legend { font-weight: 700; padding: 0 8px; color: #0f766e; }
+.print-designer .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; }
+.print-designer .checks label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.print-designer .logo-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.print-designer .logo-row img { max-height: 70px; max-width: 220px; border: 1px dashed #94a3b8; border-radius: 8px; padding: 4px; background: white; }
+.print-designer input[type="color"] { width: 54px; height: 36px; padding: 2px; }
 .reference-top { display: grid; grid-template-columns: 1fr .8fr 1fr; align-items: start; gap: 20px; margin: 22px 0 18px; }
 .reference-customer h3 { margin: 4px 0; font-size: 14px; }
 .reference-title { text-align: center; color: #0990ad; font-size: 25px; letter-spacing: 2px; margin: 20px 0 0; }
@@ -4129,9 +4156,12 @@ td small {
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-summary { padding: 8px; break-inside: auto; }
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-items th,
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-items td { display: table-cell; font-size: 7px; padding: 5px 2px; }
-  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items th:first-child,
-  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items tbody td:first-child { display: none; }
+  .reference-invoice.has-serial:is(.format-80mm, .format-58mm) .reference-items th:first-child,
+  .reference-invoice.has-serial:is(.format-80mm, .format-58mm) .reference-items tbody td:first-child { display: none; }
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-grand { font-size: 13px; padding: 8px; }
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-signatures { padding-top: 25px; font-size: 7px; gap: 10px; }
   .reference-invoice:is(.format-80mm, .format-58mm) .reference-signatures > div { width: 48%; }
 }
+.party-pay { padding: 14px 16px; margin: 12px 0; border-color: #99d8cc; background: #f4fbf9; }
+.party-pay h3 { margin: 0 0 10px; color: #0f766e; font-size: 15px; }
+.party-pay .row { gap: 10px; margin-top: 6px; }

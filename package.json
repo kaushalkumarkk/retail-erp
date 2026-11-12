@@ -1,6 +1,6 @@
 {
   "name": "retailer-erp",
-  "version": "1.2.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,10 +15,12 @@
     "build:ui": "vite build",
     "desktop:pack": "npm run build:ui && electron-builder --dir",
     "test:desktop": "npm run build:ui && node --test tests/desktop.test.cjs",
-    "licence": "node tools/licence.mjs"
+    "licence": "node tools/licence.mjs",
+    "release": "npm run build:ui && electron-builder --win --publish always"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.48.0",
+    "electron-updater": "^6.8.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
