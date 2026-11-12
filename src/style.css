@@ -3451,6 +3451,12 @@ td small {
 .billing-payment > p {
   grid-column: 1/-1;
 }
+.bill-adjustments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
 .billing-payment .check {
   align-self: end;
   margin: 0;
@@ -4032,4 +4038,94 @@ td small {
   font-weight: 600;
   color: var(--muted);
   font-size: inherit;
+}
+
+/* Shared sales/POS invoice, matching the supplied NG-1081 layout. */
+.reference-invoice {
+  --invoice-teal: #10758e;
+  color: #172033;
+  font-family: Arial, sans-serif;
+  padding: 30px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.reference-invoice p { margin: 3px 0; color: #475569; white-space: pre-line; overflow-wrap: anywhere; }
+.reference-invoice small { display: block; color: #64748b; font-size: 10px; }
+.reference-invoice .reference-brand { text-align: left; border-bottom: 4px solid var(--invoice-teal); padding-bottom: 12px; }
+.reference-invoice .reference-brand h2 { color: #111827; font-size: 25px; margin: 0; }
+.reference-top { display: grid; grid-template-columns: 1fr .8fr 1fr; align-items: start; gap: 20px; margin: 22px 0 18px; }
+.reference-customer h3 { margin: 4px 0; font-size: 14px; }
+.reference-title { text-align: center; color: #0990ad; font-size: 25px; letter-spacing: 2px; margin: 20px 0 0; }
+.reference-details { border: 1px solid #dce3eb; border-radius: 13px; padding: 16px; text-align: right; min-height: 185px; }
+.reference-details small { margin-top: 7px; font-weight: bold; letter-spacing: .4px; }
+.reference-details small:first-child { margin-top: 0; }
+.reference-details > b, .reference-details > strong { display: block; }
+.reference-details > strong { color: var(--invoice-teal); font-size: 16px; overflow-wrap: anywhere; }
+.reference-details .reference-mode, .reference-details .reference-status { display: inline-block; padding: 3px 9px; border-radius: 4px; font-size: 10px; }
+.reference-mode { background: #e2e8f0; text-transform: uppercase; }
+.reference-status { color: #be123c; background: #fff1f2; border: 1px solid #fda4af; }
+.reference-status.status-paid { color: #047857; border-color: #6ee7b7; background: #ecfdf5; }
+.reference-items { border: 1px solid #dce3eb; border-radius: 13px; overflow: hidden; }
+.reference-invoice .reference-items table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 11px; white-space: normal; }
+.reference-invoice .reference-items th { background: var(--invoice-teal); color: white; font-size: 11px; padding: 12px 8px; border: 0; text-transform: none; letter-spacing: 0; }
+.reference-invoice .reference-items td { padding: 9px 8px; border-bottom: 1px solid #e2e8f0; color: #172033; overflow-wrap: anywhere; }
+.reference-items th:first-child { width: 6%; }
+.reference-items th:nth-child(2) { width: 36%; }
+.reference-items th:nth-child(3), .reference-items th:nth-child(4) { width: 11%; }
+.reference-items th:nth-child(5) { width: 18%; }
+.reference-items th:nth-child(6) { width: 18%; }
+.reference-items th:nth-child(3), .reference-items th:nth-child(4), .reference-items td:nth-child(3), .reference-items td:nth-child(4) { text-align: center; }
+.reference-items th:nth-child(n+5), .reference-items td:nth-child(n+5), .reference-items tfoot td:last-child { text-align: right; }
+.reference-items tfoot td { font-weight: bold; border-top: 2px solid #cbd5e1; border-bottom: 0 !important; }
+.reference-items tbody tr:last-child td { border-bottom: 0; }
+.reference-summary { display: grid; grid-template-columns: 1.05fr 1fr; gap: 30px; border: 1px solid #cbd5e1; border-radius: 13px; margin-top: 25px; padding: 22px; break-inside: avoid; }
+.reference-notes { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.reference-balance { color: #dc2626; }
+.reference-notes strong { margin-left: 8px; font-size: 15px; }
+.reference-words { border-top: 1px solid #e2e8f0; padding-top: 16px; }
+.reference-words small { margin-bottom: 6px; font-weight: bold; }
+.reference-terms { margin-top: auto; }
+.reference-terms h3 { font-size: 14px; margin: 0; }
+.reference-totals > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.reference-totals > div > :last-child { white-space: nowrap; }
+.reference-totals .reference-grand { padding: 12px 15px; margin: 0 -1px 10px; background: var(--invoice-teal); color: white; border-radius: 11px; font-size: 18px; font-weight: bold; }
+.reference-invoice .reference-signatures { margin-top: 25px; padding-top: 45px; border-top: 1px solid #e2e8f0; color: #172033; text-align: left; gap: 30px; break-inside: avoid; }
+.reference-signatures > div { width: 28%; }
+.reference-signatures > div:last-child { text-align: right; }
+.reference-signatures p, .reference-signatures strong { display: block; min-height: 34px; }
+.reference-signatures b { display: block; border-top: 2px solid #94a3b8; padding-top: 10px; }
+@media screen and (max-width: 650px) {
+  .reference-invoice { padding: 15px; }
+  .reference-top { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .reference-title { grid-column: 1 / -1; grid-row: 1; margin: 0; }
+  .reference-summary { grid-template-columns: 1fr; padding: 15px; gap: 20px; }
+  .reference-invoice .reference-items th, .reference-invoice .reference-items td { padding: 7px 3px; font-size: 9px; }
+  .reference-signatures > div { width: 45%; }
+}
+@media print {
+  html, body, #root, .overlay, .modal, .modal.wide { background: white !important; min-height: 0; }
+  .modal, .modal.wide { width: 100%; max-width: none; border-radius: 0; }
+  .reference-invoice { padding: 0; margin: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .reference-invoice.format-A4 { width: 100%; }
+  .reference-items { overflow: visible; }
+  .reference-items th:first-child { border-top-left-radius: 12px; }
+  .reference-items th:last-child { border-top-right-radius: 12px; }
+  .reference-items thead { display: table-header-group; }
+  .reference-items tfoot { display: table-row-group; }
+  .reference-invoice .reference-items tr { break-inside: avoid; }
+  .reference-invoice:is(.format-80mm, .format-58mm) { width: 72mm; font-size: 9px; }
+  .reference-invoice.format-58mm { width: 50mm; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-top,
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-summary { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-brand h2 { font-size: 15px; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-title { font-size: 16px; margin: 0; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-details { width: 100%; min-height: 0; padding: 7px; text-align: left; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-summary { padding: 8px; break-inside: auto; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items th,
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items td { display: table-cell; font-size: 7px; padding: 5px 2px; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items th:first-child,
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-items tbody td:first-child { display: none; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-grand { font-size: 13px; padding: 8px; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-signatures { padding-top: 25px; font-size: 7px; gap: 10px; }
+  .reference-invoice:is(.format-80mm, .format-58mm) .reference-signatures > div { width: 48%; }
 }

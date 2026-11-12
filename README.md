@@ -25,6 +25,10 @@ The desktop app uses the fixed origin `retail://app` and persistent Electron loc
 
 Desktop exports use native save dialogs; invoice printing uses the system print dialog, including Save as PDF. **File → Backup & Restore** opens the backup screen. Export JSON backups regularly.
 
+POS receipts and invoice previews share the supplied NG-1081 invoice layout: teal item headings and total, customer and invoice details, payment status, outstanding balance, amount in Indian currency words, terms and signature lines. A4 printing uses this layout; 80mm and 58mm formats stack the sections for narrow printers. Customer address and phone are saved with new invoices. Reprints show current payment allocations and party balances.
+
+Sales, POS and purchase entry include **Loading Charge (₹)** and **Bill Discount (₹)**. These fixed amounts apply after item discounts and before GST, allocated proportionally across item values and their GST rates. Printed bills show the item subtotal, bill discount and loading charge separately. Tax reports, balances, full payments, sales revenue and purchase inventory costs use the adjusted values. Bill discount cannot exceed the item subtotal; loading charge requires a positive item subtotal. Old invoices retain their original totals, and POS checkout clears both fields for the next bill.
+
 ### Optional browser development preview
 
 ```sh
@@ -123,3 +127,7 @@ Click the top-right avatar (**Your Account**) to change your password, switch op
 All password fields include accessible show/hide eye buttons (setup, sign-in, change/reset, recovery, and new operators). Passwords start hidden; the visibility button does not submit the form.
 
 Retail ERP now requires a machine-bound, signed annual licence and locks the complete business interface at expiry. The licence/renewal page and 30-day warning support yearly renewals. Read [LICENSING.md](LICENSING.md) for issuing commands, renewal timing, the local owner activation key, key custody, backup access while locked, and offline enforcement limits. Shop installers never contain the private signing key or the issuing CLI. Browser preview now displays a desktop-runtime-required screen unless a test bridge is supplied by the automated UI harness.
+
+### Credit / Udhaar billing
+
+Select **Credit / Udhaar** in a sales, POS or purchase bill's **Payment Mode**, then select the customer or supplier. Credit bills record zero received/paid and leave the entire total outstanding against that party; customer credit limits still apply. The receipt shows Credit / Udhaar and UNPAID. Collect or pay later through **Payment In & Out** using the actual payment method. For a partial payment at billing time, choose the actual method (Cash, UPI, etc.), turn off the full-payment checkbox and enter the received/paid amount. POS returns to Cash and full payment after checkout.

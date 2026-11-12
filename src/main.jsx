@@ -1,3 +1,4 @@
+import { amountInWords, invoiceSummary } from "./lib/invoice-format.mjs";
 import { version as APP_VERSION } from "../package.json";
 import React, { useEffect, useRef, useState, useId } from "react";
 import { createRoot } from "react-dom/client";
@@ -2857,10 +2858,14 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
     [q, setQ] = useState(""),
     [showProducts, setShowProducts] = useState(false),
     [highlight, setHighlight] = useState(0),
-    [fullPaid, setFullPaid] = useState(pos || false);
+    [fullPaid, setFullPaid] = useState(Boolean(pos) && initial.mode !== "Credit");
   const purchase = f.type === "purchase";
+  const credit = f.mode === "Credit";
   const party = db.parties.find((p) => p.id === f.partyId);
   let calc = {
+    subtotal: 0,
+    billDiscount: 0,
+    loadingCharge: 0,
     taxable: 0,
     tax: 0,
     total: 0,
@@ -2869,6 +2874,7 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
     igst: 0,
     lines: [],
   };
+  let calculationError = "";
   try {
     if (f.lines.length)
       calc = calculate(
@@ -2876,8 +2882,12 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
         db.items,
         f.gst,
         (party?.state || db.settings.state) !== db.settings.state,
+        f,
       );
-  } catch {}
+  } catch (error) {
+    calculationError = error.message;
+  }
+  const paidAmount = credit ? 0 : fullPaid ? calc.total : Number(f.paid || 0);
   const add = (i) => {
     setF((s) => {
       const existing = s.lines.find((l) => l.itemId === i.id);
@@ -2906,9 +2916,10 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
     });
   const submit = (e) => {
     e.preventDefault();
-    const result = onSave({ ...f, paid: fullPaid ? calc.total : f.paid });
+    const result = onSave({ ...f, paid: paidAmount });
     if (result && pos) {
-      setF({ ...initial, lines: [], partyId: "", paid: 0 });
+      setF({ ...initial, lines: [], partyId: "", paid: 0, loadingCharge: 0, billDiscount: 0 });
+      setFullPaid(Boolean(pos) && initial.mode !== "Credit");
       setQ("");
     }
   };
@@ -3189,7 +3200,7 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
             <div className="form-grid document-fields">
               <Select
                 label={purchase ? "Supplier *" : "Customer"}
-                required={purchase}
+                required={purchase || credit}
                 value={f.partyId}
                 onChange={(e) => {
                   if (purchase && e.target.value === "__add_supplier__") {
@@ -3243,27 +3254,52 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
               value={f.notes || ""}
               onChange={(e) => setF({ ...f, notes: e.target.value })}
             />
+            <div className="bill-adjustments">
+              <Input
+                label="Loading Charge (₹)"
+                type="number"
+                min="0"
+                step="0.01"
+                value={f.loadingCharge ?? 0}
+                onChange={(e) => setF({ ...f, loadingCharge: e.target.value })}
+              />
+              <Input
+                label="Bill Discount (₹)"
+                type="number"
+                min="0"
+                step="0.01"
+                value={f.billDiscount ?? 0}
+                onChange={(e) => setF({ ...f, billDiscount: e.target.value })}
+              />
+            </div>
+            <p className="small muted">Loading charge and bill discount apply before GST, in addition to item discounts.</p>
           </section>
           <section className="billing-payment">
             <h2>Payment & balance</h2>{" "}
             <Select
               label="Payment Mode"
               value={f.mode}
-              onChange={(e) => setF({ ...f, mode: e.target.value })}
+              onChange={(e) => {
+                const mode = e.target.value;
+                setF({ ...f, mode, paid: mode === "Credit" ? 0 : f.paid });
+                if (mode === "Credit") setFullPaid(false);
+                else if (credit) setFullPaid(Boolean(pos));
+              }}
             >
-              {["Cash", "UPI", "Card", "Bank", "Cheque"].map((m) => (
-                <option key={m}>{m}</option>
+              {["Cash", "UPI", "Card", "Bank", "Cheque", "Credit"].map((m) => (
+                <option key={m} value={m}>{m === "Credit" ? "Credit / Udhaar" : m}</option>
               ))}
             </Select>
-            <label className="check">
+            {credit && <p className="small muted">{purchase ? "Select a supplier. The full bill remains payable; record payment later in Payment In & Out." : "Select a customer for udhaar. Nothing is received now; collect later in Payment In & Out."}</p>}
+            {!credit && <label className="check">
               <input
                 type="checkbox"
                 checked={fullPaid}
                 onChange={(e) => setFullPaid(e.target.checked)}
               />{" "}
               {purchase ? "Paid in full" : "Received full amount"}
-            </label>
-            {!fullPaid && (
+            </label>}
+            {!credit && !fullPaid && (
               <Input
                 label={purchase ? "Amount Paid" : "Amount Received"}
                 type="number"
@@ -3277,7 +3313,7 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
             <div className="summary-row">
               <span>Balance due</span>
               <b className="amber-text">
-                {money(calc.total - (fullPaid ? calc.total : Number(f.paid)))}
+                {money(calc.total - paidAmount)}
               </b>
             </div>
             {party && (
@@ -3287,8 +3323,14 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
             )}
           </section>
           <section className="billing-totals">
+            {calculationError && <p role="alert" className="danger-text">{calculationError}</p>}
             <div className="tax-breakdown">
               {" "}
+              {(calc.loadingCharge > 0 || calc.billDiscount > 0) && <>
+                <div className="summary-row"><span>Item subtotal</span><b>{money(calc.subtotal)}</b></div>
+                <div className="summary-row"><span>Bill discount</span><b>−{money(calc.billDiscount)}</b></div>
+                <div className="summary-row"><span>Loading charge</span><b>{money(calc.loadingCharge)}</b></div>
+              </>}
               <div className="summary-row">
                 <span>Taxable value</span>
                 <b>{money(calc.taxable)}</b>
@@ -3319,7 +3361,7 @@ function DocumentEditor({ db, initial, pos, onSave, onBack, onAddSupplier }) {
               type="submit"
               kind="primary full"
               icon={pos ? "Receipt" : "DeviceFloppy"}
-              disabled={!f.lines.length}
+              disabled={!f.lines.length || Boolean(calculationError) || (credit && !party)}
             >
               {pos
                 ? "Save & View Receipt"
@@ -3871,125 +3913,73 @@ function Settings({ db, onSave }) {
   );
 }
 function Invoice({ doc: d, settings: s, db }) {
+  const party = db.parties.find((p) => p.id === d.partyId);
+  const summary = invoiceSummary(db, d);
+  const number = (value) => Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const date = new Date(`${d.date}T12:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const title = d.type === "purchase" ? "PURCHASE BILL" : d.gst ? "TAX INVOICE" : "INVOICE";
   return (
     <>
+      <style media="print">{`@page { size: ${s.printFormat === "A4" ? "A4" : "auto"}; margin: ${s.printFormat === "A4" ? "10mm" : "3mm"}; }`}</style>
       <div className="invoice-actions">
-        <Badge color={d.void ? "rose" : "blue"}>
-          {d.void
-            ? "CANCELLED"
-            : d.type === "purchase"
-              ? "PURCHASE BILL"
-              : d.gst
-                ? "TAX INVOICE"
-                : "NON-GST INVOICE"}
-        </Badge>
-        <Button icon="Printer" kind="primary" onClick={() => window.print()}>
-          Print / Save PDF
-        </Button>
+        <Badge color={d.void ? "rose" : "blue"}>{d.void ? "CANCELLED" : title}</Badge>
+        <Button icon="Printer" kind="primary" onClick={() => window.print()}>Print / Save PDF</Button>
       </div>
-      <article className={`print-invoice format-${s.printFormat}`}>
-        <header>
+      <article className={`print-invoice reference-invoice format-${s.printFormat}`}>
+        <header className="reference-brand">
           <h2>{s.name}</h2>
-          <p>{s.address}</p>
-          <p>
-            {s.gstin && `GSTIN: ${s.gstin}`} {s.phone && `· ${s.phone}`}
-          </p>
-          <div className="invoice-title">
-            {d.void ? "CANCELLED · " : ""}
-            {d.type === "purchase"
-              ? "PURCHASE BILL"
-              : d.gst
-                ? "TAX INVOICE"
-                : "BILL OF SUPPLY"}
-          </div>
+          {s.address && <p>{s.address}</p>}
+          {(s.gstin || s.phone) && <p>{[s.gstin && `GSTIN: ${s.gstin}`, s.phone && `Contact: ${s.phone}`].filter(Boolean).join(" · ")}</p>}
         </header>
-        <div className="invoice-meta">
-          <div>
-            <small>{d.type === "purchase" ? "Supplier" : "Bill To"}</small>
-            <b>{d.partyName}</b>
+        <div className="reference-top">
+          <section className="reference-customer">
+            <b>{d.type === "purchase" ? "Supplier" : "Bill To"}</b>
+            <h3>{d.partyName}</h3>
+            {(d.partyAddress ?? party?.address) && <p>{d.partyAddress ?? party?.address}</p>}
+            {(d.partyPhone ?? party?.phone) && <p>Contact No. : <b>{d.partyPhone ?? party?.phone}</b></p>}
+            <p>State: <b>{stateName(d.partyState)}</b></p>
             {d.partyGstin && <p>GSTIN: {d.partyGstin}</p>}
-            <p>
-              Place of supply: {stateName(d.partyState)} ({d.partyState})
-            </p>
-          </div>
-          <div>
-            <p>
-              Invoice: <b>{d.number}</b>
-            </p>
-            <p>Date: {d.date}</p>
+          </section>
+          <h2 className="reference-title">{d.void ? "CANCELLED" : title}</h2>
+          <section className="reference-details">
+            <small>INVOICE NUMBER</small><strong>{d.number}</strong>
+            <small>INVOICE DATE</small><b>{date}</b>
+            <small>PAYMENT MODE</small><b className="reference-mode">{d.mode === "Credit" ? "Credit / Udhaar" : d.mode}</b>
+            <small>INVOICE STATUS</small><b className={`reference-status status-${summary.status.toLowerCase().replaceAll(" ", "-")}`}>{summary.status}</b>
             {d.reference && <p>Reference: {d.reference}</p>}
-            <p>Payment: {d.mode}</p>
+          </section>
+        </div>
+        <div className="reference-items">
+          <table aria-label="Invoice items">
+            <thead><tr>{["#", "Item name", "Quantity", "Unit", "Price/ Unit", "Amount"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>{d.lines.map((l, i) => <tr key={i}>
+              <td>{i + 1}</td><td><b>{l.name}</b>{d.gst && <small>HSN: {l.hsn || "—"} · GST {l.gstRate}%</small>}{l.discount > 0 && <small>Discount: {l.discount}%</small>}</td>
+              <td><b>{l.qty}</b></td><td>{l.unit}</td><td>{number(l.rate)}</td><td><b>{number(l.itemTaxable ?? l.taxable)}</b></td>
+            </tr>)}</tbody>
+            <tfoot><tr><td colSpan="2">Total</td><td>{round(d.lines.reduce((sum, l) => sum + Number(l.qty), 0))}</td><td colSpan="2"></td><td>{money(d.subtotal ?? d.taxable)}</td></tr></tfoot>
+          </table>
+        </div>
+        <div className="reference-summary">
+          <div className="reference-notes">
+            <div><b>TOTAL BALANCE <strong className="reference-balance">{money(summary.totalBalance)}</strong></b><small>(Previous Due: {money(summary.previousDue)} + Current Bill Due: {money(summary.due)})</small><small>Balances reflect current payment allocations.</small></div>
+            <div className="reference-words"><small>AMOUNT IN WORDS:</small><b><i>{amountInWords(d.total)}</i></b></div>
+            {(s.bank || s.upi) && <div className="reference-payment"><b>Payment Details</b><p>{[s.bank, s.account && `A/C ${s.account}`, s.ifsc && `IFSC ${s.ifsc}`, s.branch].filter(Boolean).join(" · ")}</p>{s.upi && <p>UPI: {s.upi}</p>}</div>}
+            <div className="reference-terms"><h3>Terms and Conditions</h3><p>{d.notes || s.terms}</p></div>
+          </div>
+          <div className="reference-totals">
+            <div><span>Sub Total</span><b>{money(d.subtotal ?? d.taxable)}</b></div>
+            {d.billDiscount > 0 && <div className="invoice-discount"><span>Discount</span><b>−{money(d.billDiscount)}</b></div>}
+            {d.loadingCharge > 0 && <div className="invoice-loading"><span>LOADING CHARGE:</span><b>{money(d.loadingCharge)}</b></div>}
+            {d.gst && [["CGST", d.cgst], ["SGST", d.sgst], ["IGST", d.igst]].filter(([, value]) => value > 0).map(([label, value]) => <div key={label}><span>{label}</span><b>{money(value)}</b></div>)}
+            <div className="reference-grand"><span>Total</span><b>{money(d.total)}</b></div>
+            <div><span>Received</span><span>{money(summary.received)}</span></div>
+            <div><span>Previous Due</span><span>{money(summary.previousDue)}</span></div>
+            <div className="reference-balance"><b>Total Balance</b><b>{money(summary.totalBalance)}</b></div>
           </div>
         </div>
-        <Table
-          heads={[
-            "Product / HSN",
-            "Qty",
-            "Rate",
-            "Disc %",
-            "Taxable",
-            "GST",
-            "Amount",
-          ]}
-        >
-          {d.lines.map((l, i) => (
-            <tr key={i}>
-              <td>
-                {l.name}
-                <small>{l.hsn}</small>
-              </td>
-              <td>
-                {l.qty} {l.unit}
-              </td>
-              <td>{money(l.rate)}</td>
-              <td>{l.discount}%</td>
-              <td>{money(l.taxable)}</td>
-              <td>
-                {l.gstRate}%<small>{money(l.tax)}</small>
-              </td>
-              <td>{money(l.total)}</td>
-            </tr>
-          ))}
-        </Table>
-        <div className="invoice-totals">
-          {[
-            ["Taxable value", d.taxable],
-            ["CGST", d.cgst],
-            ["SGST", d.sgst],
-            ["IGST", d.igst],
-            ["Grand total", d.total],
-            ["Paid on invoice", d.paid],
-            ["Later payments", documentPaid(db, d) - d.paid],
-            ["Balance due", d.total - documentPaid(db, d)],
-          ].map(([l, v]) => (
-            <div key={l} className={l === "Grand total" ? "grand" : ""}>
-              <span>{l}</span>
-              <b>{money(v)}</b>
-            </div>
-          ))}
-        </div>
-        {(s.bank || s.upi) && (
-          <div className="invoice-bank">
-            <b>Payment Details</b>
-            <p>
-              {s.bank} {s.account && `· A/C ${s.account}`}{" "}
-              {s.ifsc && `· IFSC ${s.ifsc}`}
-            </p>
-            {s.upi && <p>UPI: {s.upi}</p>}
-          </div>
-        )}
-        <div className="invoice-terms">
-          <b>Terms & Conditions</b>
-          <p>{d.notes || s.terms}</p>
-        </div>
-        <footer>
-          <span>Computer generated invoice</span>
-          <span>
-            For {s.name}
-            <br />
-            <br />
-            Authorized Signatory
-          </span>
+        <footer className="reference-signatures">
+          <div><p>Customer's Signature</p><b>Receiver's Signature</b></div>
+          <div><strong>For {s.name}</strong><b>Authorized Signatory</b></div>
         </footer>
       </article>
     </>

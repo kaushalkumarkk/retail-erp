@@ -64,7 +64,7 @@ const positive = (n, label, zero = true) => {
     );
   return Number(n);
 };
-export function calculate(lines, items, gst = true, interstate = false) {
+export function calculate(lines, items, gst = true, interstate = false, adjustments = {}) {
   if (!lines.length) throw Error("Add at least one item.");
   const result = lines.map((l) => {
     const i = items.find((i) => i.id === l.itemId);
@@ -98,8 +98,37 @@ export function calculate(lines, items, gst = true, interstate = false) {
     };
   });
   const sum = (k) => round(result.reduce((s, l) => s + l[k], 0));
+  const subtotal = sum("taxable");
+  const billDiscount = round(positive(adjustments.billDiscount ?? 0, "Bill discount"));
+  const loadingCharge = round(positive(adjustments.loadingCharge ?? 0, "Loading charge"));
+  if (billDiscount > subtotal)
+    throw Error("Bill discount cannot exceed the item subtotal.");
+  if (loadingCharge > 0 && subtotal === 0)
+    throw Error("Loading charge requires items with a positive value.");
+  // Allocate adjustments before tax. Cumulative rounding preserves every paise
+  // across mixed GST rates and keeps line-based reports and journals consistent.
+  let cumulative = 0, allocatedDiscount = 0, allocatedLoading = 0;
+  for (const line of result) {
+    line.itemTaxable = line.taxable;
+    cumulative = round(cumulative + line.itemTaxable);
+    const discountToDate = subtotal ? round(billDiscount * cumulative / subtotal) : 0;
+    const loadingToDate = subtotal ? round(loadingCharge * cumulative / subtotal) : 0;
+    line.billDiscount = round(discountToDate - allocatedDiscount);
+    line.loadingCharge = round(loadingToDate - allocatedLoading);
+    allocatedDiscount = discountToDate;
+    allocatedLoading = loadingToDate;
+    line.taxable = round(line.itemTaxable - line.billDiscount + line.loadingCharge);
+    line.tax = round(line.taxable * line.gstRate / 100);
+    line.cgst = interstate ? 0 : round(line.tax / 2);
+    line.sgst = interstate ? 0 : round(line.tax - line.cgst);
+    line.igst = interstate ? line.tax : 0;
+    line.total = round(line.taxable + line.tax);
+  }
   return {
     lines: result,
+    subtotal,
+    billDiscount,
+    loadingCharge,
     taxable: sum("taxable"),
     tax: sum("tax"),
     cgst: sum("cgst"),
@@ -272,8 +301,14 @@ export function postDocument(state, input) {
     db.items,
     input.gst !== false,
     interstate,
+    input,
   );
   const paid = positive(input.paid || 0, "Paid amount");
+  if (input.mode === "Credit") {
+    if (!party) throw Error("Select a customer for a Credit / Udhaar bill.");
+    if (paid > 0)
+      throw Error("Credit / Udhaar bills cannot include a payment. Choose the received payment mode for partial payments.");
+  }
   if (paid > calc.total) throw Error("Paid amount cannot exceed the total.");
   if (!party && paid < calc.total)
     throw Error("Select a customer for a credit invoice.");
@@ -308,6 +343,8 @@ export function postDocument(state, input) {
     paid,
     partyName: party?.name || "Walk-in Customer",
     partyGstin: party?.gstin || "",
+    partyAddress: party?.address || "",
+    partyPhone: party?.phone || "",
     partyState: party?.state || db.settings.state,
     createdAt: new Date().toISOString(),
     void: false,
@@ -681,6 +718,10 @@ export function validateBackup(value) {
     if (!["sale", "purchase"].includes(d.type) || !Array.isArray(d.lines))
       throw Error("Invalid document.");
     for (const k of ["total", "taxable", "tax", "paid"]) positive(d[k], k);
+    for (const k of ["billDiscount", "loadingCharge", "subtotal"])
+      if (d[k] !== undefined) positive(d[k], k);
+    if (Number(d.billDiscount || 0) > (d.subtotal ?? d.taxable))
+      throw Error("Bill discount cannot exceed the item subtotal.");
     if (d.lines.some((l) => !ids.has(l.itemId)))
       throw Error("Document references a missing item.");
   }

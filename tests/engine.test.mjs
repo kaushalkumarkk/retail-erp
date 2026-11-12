@@ -302,3 +302,33 @@ test("payments allocate opening debt first, then oldest invoices, and reversal r
   balanced(db);
   assert.throws(() => voidPayment(db, db.payments[0].id), /already/);
 });
+
+test("Credit / Udhaar bills remain fully outstanding without cash or bank receipts and can be collected later", () => {
+  const initial = fixture();
+  const { db, doc } = postDocument(initial, invoice(initial, { mode: "Credit", paid: 0 }));
+  assert.equal(doc.mode, "Credit");
+  assert.equal(doc.paid, 0);
+  assert.equal(balance(db, db.parties[0]), 147);
+  assert.equal(metrics(db).cash, metrics(initial).cash);
+  const entries = db.journals.filter((j) => j.source === doc.id).flatMap((j) => j.entries);
+  assert.ok(!entries.some((e) => e.account === "Cash" || e.account === "Bank"));
+  assert.equal(entries.find((e) => e.account === "Accounts receivable").debit, 147);
+  const collected = postPayment(db, { partyId: doc.partyId, amount: 147, mode: "UPI" });
+  assert.equal(balance(collected, collected.parties[0]), 0);
+  assert.equal(metrics(collected).cash, 147);
+  balanced(collected);
+  assert.throws(() => postDocument(initial, invoice(initial, { mode: "Credit", paid: 10 })), /cannot include a payment/);
+  assert.throws(() => postDocument(initial, invoice(initial, { mode: "Credit", partyId: "" })), /Select a customer/);
+  const limited = structuredClone(initial);
+  limited.parties[0].creditLimit = 100;
+  assert.throws(() => postDocument(limited, invoice(limited, { mode: "Credit" })), /credit limit/);
+});
+
+test("Credit purchases record supplier dues without a payment", () => {
+  const initial = fixture();
+  const { db, doc } = postDocument(initial, invoice(initial, { type: "purchase", mode: "Credit", partyId: initial.parties[1].id }));
+  assert.equal(doc.paid, 0);
+  assert.equal(balance(db, db.parties[1]), doc.total);
+  assert.equal(metrics(db).cash, 0);
+  balanced(db);
+});

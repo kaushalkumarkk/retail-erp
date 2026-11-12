@@ -99,7 +99,8 @@ test("inventory, customer, GST billing, payment, persistence, reports and backup
   await page.getByLabel("Premium Rice quantity").fill("2");
   await page.getByLabel("Amount Received").fill("47");
   await page.getByRole("button", { name: "Save Invoice", exact: true }).click();
-  await expect(dialog.getByText("₹147.00", { exact: true })).toHaveCount(2);
+  await expect(dialog.locator(".reference-grand")).toContainText("₹147.00");
+  await expect(dialog.locator(".reference-status")).toHaveText("PART PAID");
   await dialog.getByRole("button", { name: "Close dialog" }).click();
   await page.keyboard.press("F6");
   await dialog
@@ -178,12 +179,42 @@ test("POS resets cart after checkout, fixed appearance and mobile navigation wor
     .getByRole("button", { name: "Express POS" })
     .click();
   await page.getByRole("option", { name: /Tea/ }).click();
+  await page.getByLabel("Loading Charge (₹)", { exact: true }).fill("5");
+  await page.getByLabel("Bill Discount (₹)", { exact: true }).fill("30");
+  await expect(page.getByRole("alert")).toContainText("Bill discount cannot exceed");
+  await expect(page.getByRole("button", { name: "Save & View Receipt" })).toBeDisabled();
+  await page.getByLabel("Bill Discount (₹)", { exact: true }).fill("2");
+  await expect(page.locator(".total-row strong")).toHaveText("₹23.00");
   await page.getByRole("button", { name: "Save & View Receipt" }).click();
   await expect(dialog).toBeVisible();
+  const invoice = dialog.locator(".reference-invoice");
+  await expect(invoice.getByRole("table", { name: "Invoice items" })).toBeVisible();
+  await expect(invoice.locator(".reference-status")).toHaveText("PAID");
+  await expect(invoice.locator(".reference-grand")).toContainText("₹23.00");
+  await expect(invoice.locator(".invoice-loading")).toContainText("₹5.00");
+  await expect(invoice.locator(".invoice-discount")).toContainText("−₹2.00");
+  expect(await page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem("retailer-erp:v1")).documents[0];
+    return { loadingCharge: doc.loadingCharge, billDiscount: doc.billDiscount, total: doc.total, paid: doc.paid };
+  })).toEqual({ loadingCharge: 5, billDiscount: 2, total: 23, paid: 23 });
+  await expect(invoice.locator(".reference-words")).toContainText("Twenty Three Rupees Only");
+  await expect(invoice.getByText("Receiver's Signature", { exact: true })).toBeVisible();
+  await page.emulateMedia({ media: "print" });
+  await expect(page.locator(".invoice-actions")).toBeHidden();
+  await page.pdf({ path: "/tmp/retail-pos-invoice.pdf", format: "A4", printBackground: true });
+  for (const format of ["80mm", "58mm"]) {
+    await invoice.evaluate((element, format) => { element.classList.remove("format-A4", "format-80mm", "format-58mm"); element.classList.add(`format-${format}`); }, format);
+    await expect(invoice.getByRole("columnheader", { name: "Unit", exact: true })).toBeVisible();
+    await expect(invoice.getByRole("columnheader", { name: "Price/ Unit", exact: true })).toBeVisible();
+    expect(await invoice.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBeTruthy();
+  }
+  await page.emulateMedia({ media: "screen" });
   await dialog.getByRole("button", { name: "Close dialog" }).click();
   await expect(
     page.getByRole("heading", { name: "Your cart is empty" }),
   ).toBeVisible();
+  await expect(page.getByLabel("Loading Charge (₹)", { exact: true })).toHaveValue("0");
+  await expect(page.getByLabel("Bill Discount (₹)", { exact: true })).toHaveValue("0");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Toggle navigation" }).click();
   await page
@@ -595,4 +626,49 @@ test("password eye buttons reveal and conceal setup and sign-in fields without s
     .getByRole("button", { name: "Hide password", exact: true })
     .click();
   await expect(password).toHaveAttribute("type", "password");
+});
+
+test("POS Credit / Udhaar requires a customer, records no payment, resets and supports later collection", async ({ page }) => {
+  await page.goto("/");
+  await unlock(page);
+  const dialog = page.getByRole("dialog");
+  await page.getByRole("button", { name: "Add Item (F5)", exact: true }).click();
+  await dialog.getByLabel("Product Name").fill("Credit Tea");
+  await dialog.getByLabel("Purchase Price").fill("10");
+  await dialog.getByLabel("Sale Price").fill("20");
+  await dialog.getByLabel("Opening Stock").fill("10");
+  await dialog.getByRole("button", { name: "Save Product" }).click();
+  await page.getByRole("button", { name: "Add Party (F4)", exact: true }).click();
+  await dialog.getByLabel("Party Name").fill("Udhaar Customer");
+  await dialog.getByRole("button", { name: "Save Party" }).click();
+  await page.locator(".sidebar").getByRole("button", { name: "Express POS" }).click();
+  await page.getByRole("option", { name: /Credit Tea/ }).click();
+  const mode = page.getByRole("combobox", { name: "Payment Mode", exact: true });
+  await mode.selectOption("Credit");
+  await expect(page.getByRole("button", { name: "Save & View Receipt" })).toBeDisabled();
+  await expect(page.getByLabel("Received full amount")).toHaveCount(0);
+  await expect(page.getByLabel("Amount Received", { exact: true })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Customer", exact: true }).selectOption({ label: "Udhaar Customer" });
+  await mode.selectOption("Cash");
+  await expect(page.getByLabel("Received full amount")).toBeChecked();
+  await mode.selectOption("Credit");
+  await page.getByRole("button", { name: "Save & View Receipt" }).click();
+  await expect(dialog.locator(".reference-mode")).toHaveText("Credit / Udhaar");
+  await expect(dialog.locator(".reference-status")).toHaveText("UNPAID");
+  await expect(dialog.locator(".reference-totals")).toContainText("Received₹0.00");
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("retailer-erp:v1")).documents[0]);
+  expect(saved.mode).toBe("Credit");
+  expect(saved.paid).toBe(0);
+  await dialog.getByRole("button", { name: "Close dialog" }).click();
+  await expect(mode).toHaveValue("Cash");
+  await expect(page.getByLabel("Received full amount")).toBeChecked();
+  await page.keyboard.press("F6");
+  await dialog.getByRole("combobox", { name: "Party *", exact: true }).selectOption({ label: "Udhaar Customer" });
+  await dialog.getByLabel("Amount *", { exact: true }).fill(String(saved.total));
+  await dialog.getByRole("combobox", { name: "Payment Mode", exact: true }).selectOption("UPI");
+  await dialog.getByRole("button", { name: "Record Payment", exact: true }).click();
+  await page.locator(".sidebar").getByRole("button", { name: "Sales & Invoices", exact: true }).click();
+  await page.getByRole("button", { name: saved.number, exact: true }).click();
+  await expect(dialog.locator(".reference-status")).toHaveText("PAID");
+  await expect(dialog.locator(".reference-totals > .reference-balance")).toContainText("₹0.00");
 });
