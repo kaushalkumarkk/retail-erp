@@ -34,6 +34,7 @@ test("desktop starts without a server, saves data, and preserves it after relaun
     path.join(os.tmpdir(), "retail-desktop-test-"),
   );
   const pair = crypto.generateKeyPairSync("ed25519");
+  const testProviderDirectory = path.join(profile, "provider");
   const publicPath = path.join(profile, "test-public.pem"),
     clockPath = path.join(profile, "test-clock.txt");
   await fs.writeFile(
@@ -84,6 +85,7 @@ test("desktop starts without a server, saves data, and preserves it after relaun
         ERP_TEST_PROFILE: profile,
         ERP_TEST_PUBLIC_KEY: publicPath,
         ERP_TEST_NOW_FILE: clockPath,
+        RETAIL_ERP_VENDOR_DIR: testProviderDirectory,
       },
     });
   try {
@@ -91,6 +93,21 @@ test("desktop starts without a server, saves data, and preserves it after relaun
     let page = await app.firstWindow();
     await activateIfNeeded(page);
     await unlock(page);
+    assert.deepEqual(await page.evaluate(() => window.retailDesktop.providerAccess()), { available: false });
+    await assert.rejects(() => page.evaluate(() => window.retailDesktop.providerLicences()), /matching signing key/);
+    await fs.mkdir(testProviderDirectory);
+    await fs.writeFile(path.join(testProviderDirectory, "private-key.pem"), pair.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+    await fs.writeFile(path.join(testProviderDirectory, "licences.json"), JSON.stringify([{ ...issued, key: licenceCore.signLicence(issued, pair.privateKey) }]));
+    assert.deepEqual(await page.evaluate(() => window.retailDesktop.providerAccess()), { available: true });
+    const providerRows = await page.evaluate(() => window.retailDesktop.providerLicences());
+    assert.equal(providerRows.rows.length, 1);
+    assert.equal(providerRows.rows[0].activation, "Activated locally");
+    assert.equal(providerRows.rows[0].key, undefined);
+    await page.locator(".sidebar").getByRole("button", { name: "Licence & Renewal", exact: true }).click();
+    await page.getByRole("heading", { name: "All Licences", exact: true }).waitFor();
+    await page.getByRole("cell", { name: "RT-DESKTOP-TEST", exact: true }).waitFor();
+    await page.getByRole("region", { name: "Superadmin licence register" }).screenshot({ path: "/tmp/retail-superadmin-licences.png" });
+    await page.locator(".sidebar").getByRole("button", { name: "Dashboard", exact: true }).click();
     await page
       .getByRole("heading", { name: "RAHUL JEE TRADING COMPANY" })
       .waitFor();
@@ -211,6 +228,7 @@ test("desktop starts without a server, saves data, and preserves it after relaun
     await page
       .getByRole("heading", { name: "Express POS", exact: true })
       .waitFor();
+    await page.getByRole("button", { name: "Toggle navigation" }).click();
     await page.waitForFunction(
       () =>
         document.querySelector(".sidebar").getBoundingClientRect().width === 64,

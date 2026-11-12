@@ -36,6 +36,16 @@ The first annual activation key for **this development computer only** is saved 
 
 Distribute only the built installer/app from `release/`. Do not send the source checkout, `.vendor/`, the private signing key, or the issuing register to shopkeepers. The shop app contains verification and activation only; the issuing CLI and private key are not packaged. Medical ERP licences and signing files are unchanged and do not activate Retail ERP.
 
+## Superadmin licence list
+
+On your provider computer, sign in as an administrator and open **Licence & Renewal → Superadmin / All Licences**. The list shows every signed licence in your provider register, including shop name, licence number, Machine ID, issue/start/expiry dates, renewal links, date validity and activation confirmation. Search, validity/activation filters, issue-date filters, pagination and CSV export are available. Use **Refresh Licences** after issuing or renewing a key with the provider CLI.
+
+Development launches discover this project's `.vendor/` directory automatically. In the packaged app, first choose **File → Connect Superadmin Register…** and select your private `.vendor/` folder (enable hidden files in the folder picker if necessary). The connection is remembered on this computer; the app reloads and requires sign-in again. `RETAIL_ERP_VENDOR_DIR` also supports an explicit provider-folder location. Connecting reads the existing key and register and never initializes or replaces your signing keys.
+
+Provider access requires a private signing key matching this app's public key, checked in Electron's main process on every register read. A shop Admin role alone does not grant access. No full activation keys or private keys are returned to the interface or exported in the CSV. Provider connection settings are separate from business backups. This is a provider-computer capability, not a new role customers can assign to themselves.
+
+**Offline activation limitation:** “Activated locally” means the signed key is present in this computer's verified activation history, including queued renewals and expired keys. “Unconfirmed (offline)” means activation on another computer is not known here; it does not indicate that the client's app is inactive. “Valid”, “Expiring soon”, “Expired” and “Scheduled” describe only the signed date range, not remote activation. A central, automatically updated list of client activations would require an online activation service; the current app makes no network calls to collect that information.
+
 ## Enforcement and data
 
 Verification uses Ed25519 signatures in Electron's main process. Keys are bound to the machine ID and the retailer app, and their dates must cover exactly one annual period. The native protocol refuses to serve the business application without a valid licence. It checks expiry at runtime, on focus/resume, and synchronously before workspace writes, then moves to the lock screen when expired. Customer renderers never receive the private signing key.

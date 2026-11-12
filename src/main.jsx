@@ -57,6 +57,7 @@ import {
   IconScale,
   IconBuildingBank,
   IconPrinter,
+  IconRefresh,
 } from "@tabler/icons-react";
 const Icons = {
   IconPackage,
@@ -113,6 +114,7 @@ const Icons = {
   IconScale,
   IconBuildingBank,
   IconPrinter,
+  IconRefresh,
 };
 import { STATES, stateName } from "./lib/medical-gst";
 import { rupees as money } from "./lib/medical-format";
@@ -1458,7 +1460,7 @@ function App() {
           title="Annual Licence & Renewal"
           sub="Each shop licence is valid for one year and is tied to this computer."
         />
-        <LicenceSettings />
+        <LicenceSettings providerAllowed={admin} />
       </>
     );
   else if (page === "settings")
@@ -4546,7 +4548,79 @@ function PeriodForm({ db, current, onApply }) {
   );
 }
 
-function LicenceSettings() {
+function ProviderLicenceRegister() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [activation, setActivation] = useState("All");
+  const refresh = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setData(await window.retailDesktop.providerLicences());
+    } catch (e) {
+      setData(null);
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => { refresh(); }, []);
+  const rows = data?.rows || [];
+  return (
+    <section className="provider-register" aria-label="Superadmin licence register">
+      <div className="page-head">
+        <div>
+          <div className="workspace-kicker">SOFTWARE PROVIDER · SUPERADMIN</div>
+          <h2>All Licences</h2>
+          <p>Your issued shop licences and annual renewals.</p>
+        </div>
+        <Button icon="Refresh" onClick={refresh} disabled={busy}>{busy ? "Refreshing…" : "Refresh Licences"}</Button>
+      </div>
+      <div className="notice">
+        Client activation is offline. “Activated locally” confirms a key saved on this computer.
+        “Unconfirmed (offline)” means a client's activation has not been verified here; it does not mean their app is inactive.
+        Validity describes the licence dates, independently of activation.
+      </div>
+      {error && <p role="alert" className="danger-text">{error}</p>}
+      {data && <>
+        <div className="stats">
+          <Stat label="ISSUED LICENCES" value={rows.length} />
+          <Stat label="ACTIVATED LOCALLY" value={rows.filter((r) => r.activation === "Activated locally").length} color="green" />
+          <Stat label="EXPIRING WITHIN 30 DAYS" value={rows.filter((r) => r.validity === "Expiring soon").length} color="amber" />
+          <Stat label="EXPIRED LICENCES" value={rows.filter((r) => r.validity === "Expired").length} color="rose" />
+        </div>
+        <div className="provider-register-filter">
+          <Select label="Activation confirmation" value={activation} onChange={(e) => setActivation(e.target.value)}>
+            {["All", "Activated locally", "Unconfirmed (offline)"].map((value) => <option key={value}>{value}</option>)}
+          </Select>
+          <p className="small muted">Date filters use the issue date. Last checked: {new Date(data.checkedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</p>
+        </div>
+        <Records
+          items={rows.filter((r) => activation === "All" || r.activation === activation)}
+          filterKey="validity"
+          placeholder="Search shop, licence number or Machine ID…"
+          onExport={(matches) => {
+            try { csv("provider-licences.csv", matches); }
+            catch (e) { setError(e.message); }
+          }}
+          heads={["Shop", "Licence number", "Machine ID", "Issued", "Valid from", "Renew before", "Validity", "Activation", "Renewal of"]}
+          render={(r) => <tr key={r.id}>
+            <td><b>{r.shop}</b></td><td>{r.id}</td><td><code>{r.machine}</code></td>
+            <td>{r.date}</td><td>{r.starts}</td><td>{r.expires}</td>
+            <td><Badge color={r.validity === "Expired" ? "rose" : r.validity === "Expiring soon" ? "amber" : "green"}>{r.validity}</Badge></td>
+            <td>{r.activation}</td><td>{r.renewalOf || "—"}</td>
+          </tr>}
+          emptyTitle="No matching licences"
+          emptyText="Issue shop licences with the provider tool, then refresh this list."
+        />
+      </>}
+    </section>
+  );
+}
+
+function LicenceSettings({ providerAllowed }) {
+  const [providerAccess, setProviderAccess] = useState(false);
   const [status, setStatus] = useState(null),
     [key, setKey] = useState(""),
     [error, setError] = useState(""),
@@ -4558,7 +4632,17 @@ function LicenceSettings() {
       .then(setStatus)
       .catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    if (providerAllowed && window.retailDesktop.providerAccess)
+      window.retailDesktop.providerAccess().then((result) => {
+        if (!cancelled) setProviderAccess(result.available === true);
+      }).catch(() => { if (!cancelled) setProviderAccess(false); });
+    else setProviderAccess(false);
+    return () => { cancelled = true; };
+  }, [providerAllowed]);
   return (
+    <>
     <section className="panel licence-settings">
       <div className="licence-details">
         <div className="feature-icon green">
@@ -4652,6 +4736,8 @@ function LicenceSettings() {
         </Button>
       </form>
     </section>
+    {providerAllowed && providerAccess && <ProviderLicenceRegister />}
+    </>
   );
 }
 function LicenceNotice({ onRenew }) {

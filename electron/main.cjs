@@ -12,6 +12,7 @@ const {
 const path = require("node:path");
 const fs = require("node:fs");
 const { createLicenceService } = require("./licence-core.cjs");
+const { assertProviderDirectory, readProviderRegistry } = require("./provider-registry.cjs");
 const { pathToFileURL } = require("node:url");
 app.setName("Retail ERP");
 // This stable origin keeps localStorage consistent across app updates and installs.
@@ -68,6 +69,37 @@ else {
       event.sender.id === mainWindow.webContents.id &&
       event.senderFrame?.routingId === event.sender.mainFrame.routingId &&
       isAppURL(event.senderFrame.url);
+    const providerConfig = path.join(app.getPath("userData"), "provider-register.json");
+    let providerDirectory = process.env.RETAIL_ERP_VENDOR_DIR ||
+      (!app.isPackaged && !testing ? path.join(app.getAppPath(), ".vendor") : null);
+    if (!providerDirectory) {
+      try {
+        const config = JSON.parse(fs.readFileSync(providerConfig, "utf8"));
+        if (typeof config.directory === "string") providerDirectory = config.directory;
+      } catch {}
+    }
+    ipcMain.handle("retail:provider-access", (event) => {
+      if (!trusted(event)) throw Error("Invalid provider request.");
+      licence.assertActive();
+      try {
+        assertProviderDirectory(providerDirectory, publicKey);
+        return { available: true };
+      } catch {
+        return { available: false };
+      }
+    });
+    ipcMain.handle("retail:provider-licences", (event) => {
+      if (!trusted(event)) throw Error("Invalid provider request.");
+      licence.assertActive();
+      // Authorize every read in the main process; shop operator roles do not
+      // grant access to the provider's register or signing key.
+      assertProviderDirectory(providerDirectory, publicKey);
+      const localState = JSON.parse(fs.readFileSync(path.join(app.getPath("userData"), "licence-state.json"), "utf8"));
+      return readProviderRegistry({
+        directory: providerDirectory, publicKey,
+        localKeys: localState.keys, machine: licence.machineId,
+      });
+    });
     ipcMain.handle("retail:licence-status", (event) => {
       if (!trusted(event)) throw Error("Invalid licence request.");
       return licence.status();
@@ -236,6 +268,28 @@ else {
           {
             label: "Show Local Data Folder",
             click: () => shell.openPath(app.getPath("userData")),
+          },
+          {
+            label: "Connect Superadmin Register…",
+            click: async () => {
+              try {
+                licence.assertActive();
+                const result = await dialog.showOpenDialog(mainWindow, {
+                  title: "Select your private .vendor provider folder",
+                  message: "Choose the provider folder containing licences.json and the matching private-key.pem. Keep this folder on your own computer.",
+                  properties: ["openDirectory", "showHiddenFiles"],
+                });
+                if (result.canceled) return;
+                const directory = result.filePaths[0];
+                assertProviderDirectory(directory, publicKey);
+                readProviderRegistry({ directory, publicKey });
+                fs.writeFileSync(providerConfig, JSON.stringify({ directory }), { mode: 0o600 });
+                providerDirectory = directory;
+                await mainWindow.webContents.executeJavaScript("location.hash='/licence'; location.reload()");
+              } catch (error) {
+                dialog.showErrorBox("Superadmin register", error.message);
+              }
+            },
           },
           { type: "separator" },
           { role: process.platform === "darwin" ? "close" : "quit" },

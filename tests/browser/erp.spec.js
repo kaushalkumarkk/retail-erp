@@ -672,3 +672,50 @@ test("POS Credit / Udhaar requires a customer, records no payment, resets and su
   await expect(dialog.locator(".reference-status")).toHaveText("PAID");
   await expect(dialog.locator(".reference-totals > .reference-balance")).toContainText("₹0.00");
 });
+
+test("Superadmin licence register lists, searches, filters and exports provider records", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.retailDesktop.providerAccess = async () => ({ available: true });
+    window.retailDesktop.providerLicences = async () => ({
+      checkedAt: "2026-11-12T06:30:00Z",
+      rows: [
+        { id: "RT-OWNER", shop: "Provider Shop", machine: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF", date: "2026-11-12", starts: "2026-11-12", expires: "2027-11-12", validity: "Valid", daysRemaining: 365, activation: "Activated locally", renewalOf: "" },
+        { id: "RT-REMOTE", shop: "Client Shop", machine: "1111-2222-3333-4444-5555-6666", date: "2025-11-12", starts: "2025-11-12", expires: "2026-11-12", validity: "Expired", daysRemaining: 0, activation: "Unconfirmed (offline)", renewalOf: "" },
+      ],
+    });
+  });
+  await page.goto("/");
+  await unlock(page);
+  await page.locator(".sidebar").getByRole("button", { name: "Licence & Renewal", exact: true }).click();
+  const register = page.getByRole("region", { name: "Superadmin licence register" });
+  await expect(register.getByRole("heading", { name: "All Licences", exact: true })).toBeVisible();
+  await expect(register.getByRole("cell", { name: "Client Shop", exact: true })).toBeVisible();
+  await register.getByRole("combobox", { name: "Filter by validity" }).selectOption("Expired");
+  await expect(register.getByRole("cell", { name: "RT-OWNER", exact: true })).toHaveCount(0);
+  await expect(register.getByRole("cell", { name: "RT-REMOTE", exact: true })).toBeVisible();
+  const downloaded = page.waitForEvent("download");
+  await register.getByRole("button", { name: "Export CSV", exact: true }).click();
+  expect((await downloaded).suggestedFilename()).toBe("provider-licences.csv");
+  await register.getByRole("combobox", { name: "Filter by validity" }).selectOption("All");
+  await register.getByRole("combobox", { name: "Activation confirmation", exact: true }).selectOption("Activated locally");
+  await expect(register.getByRole("cell", { name: "RT-REMOTE", exact: true })).toHaveCount(0);
+  await expect(register.getByRole("cell", { name: "RT-OWNER", exact: true })).toBeVisible();
+  await register.getByRole("combobox", { name: "Activation confirmation", exact: true }).selectOption("All");
+  await register.getByRole("textbox", { name: "Search records", exact: true }).fill("1111-2222");
+  await expect(register.getByRole("cell", { name: "RT-OWNER", exact: true })).toHaveCount(0);
+  await expect(register.getByRole("cell", { name: "RT-REMOTE", exact: true })).toBeVisible();
+  await register.getByRole("button", { name: "Refresh Licences", exact: true }).click();
+  await expect(register.getByRole("cell", { name: "RT-REMOTE", exact: true })).toBeVisible();
+});
+
+test("normal shop administrator has no Superadmin register", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.retailDesktop.providerAccess = async () => ({ available: false });
+    window.retailDesktop.providerLicences = async () => { throw Error("Provider access is required."); };
+  });
+  await page.goto("/");
+  await unlock(page);
+  await page.locator(".sidebar").getByRole("button", { name: "Licence & Renewal", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Annual Licence & Renewal", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Superadmin licence register" })).toHaveCount(0);
+});

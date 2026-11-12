@@ -4041,6 +4041,12 @@ td small {
 }
 
 /* Shared sales/POS invoice, matching the supplied NG-1081 layout. */
+.provider-register { margin-top: 28px; }
+.provider-register .page-head h2 { font-size: 22px; }
+.provider-register .notice { margin: 16px 0; }
+.provider-register-filter { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px; margin: 16px 0; }
+.provider-register-filter .field { min-width: 230px; }
+.provider-register .records .table-wrap { max-height: 520px; }
 .reference-invoice {
   --invoice-teal: #10758e;
   color: #172033;
