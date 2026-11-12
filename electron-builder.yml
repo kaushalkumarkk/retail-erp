@@ -16,10 +16,13 @@ mac:
     - zip
   identity: null
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
 nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

@@ -195,6 +195,7 @@ else {
         minWidth: 850,
         minHeight: 650,
         title: "Retail ERP",
+        icon: path.join(__dirname, "icon.png"),
         backgroundColor: "#f0fdf7",
         show: false,
         webPreferences: {
